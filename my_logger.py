@@ -1,4 +1,5 @@
 import sys
+import syslog
 #import time
 from datetime import datetime
 
@@ -18,13 +19,20 @@ class mLOG:
 
     #set this to NEVER to disable logging
     current_level=DEV
-    #set this to true if need to print to console (like in VSCode debugging)
-    print_to_console = False
-    #must pass filename for logging to a file:
-    log_filename = ""
     
+    syslog = False
+    console = False
+    logfile = ""
+
     @staticmethod
-    def log(msg,identifier='',level=DEV,get_func_name=True):
+    def initialize(fsyslog, fconsole, fnlogfile):
+        mLOG.syslog = fsyslog
+        mLOG.console = fconsole
+        mLOG.logfile = "" if fnlogfile is None else fnlogfile
+        if not mLOG.console and mLOG.logfile == "": mLOG.syslog = True
+
+    @staticmethod
+    def log(msg,identifier='', level=DEV, get_func_name=True):
         """
         msg: is what you want to log
         identifier: is an extra string to print before func name - normally a class name
@@ -34,13 +42,14 @@ class mLOG:
         try:
             if level >= mLOG.current_level: 
                 if get_func_name:
-                    log_msg = f'{datetime.now()} {identifier}.{sys._getframe().f_back.f_code.co_name} - {msg}'
+                    log_msg = f'{identifier}.{sys._getframe().f_back.f_code.co_name} - {msg}'
                 else:
-                    log_msg = f'{datetime.now()} {identifier} - {msg}'
-                if mLOG.log_filename:
-                    print(log_msg,file=open(mLOG.log_filename,'a+'))
-                if mLOG.print_to_console:
-                    print(log_msg)
+                    log_msg = f'{identifier} - {msg}'
+                if mLOG.syslog:
+                    syslog.syslog(log_msg)
+                if mLOG.console:
+                    print(f'{datetime.now()} {log_msg}')
+                if mLOG.logfile != "":
+                    print(f'{datetime.now()} {log_msg}', file=open(mLOG.logfile,'a+'))
         except:
             pass
-

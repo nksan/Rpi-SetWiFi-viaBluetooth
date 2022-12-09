@@ -1,5 +1,6 @@
-#!/usr/local/bin/python3.9
+#!/usr/bin/python3
 from os import stat
+import argparse
 import dbus
 import dbus.service
 import dbus.mainloop.glib
@@ -7,10 +8,10 @@ from gi.repository import GLib
 from time import sleep
 import wifiwpa as wifi
 from my_logger import mLOG as Log
-from datetime import datetime
-import pathlib
+#from datetime import datetime
+#import pathlib
 import signal
-import configparser
+import syslog
 import time
 
 
@@ -36,67 +37,34 @@ SEPARATOR = SEPARATOR_HEX.decode()  # string representation can be concatenated 
 NOTIFY_TIMEOUT = 1000  #in ms - used for checking notifications
 BLE_SERVER_GLIB_TIMEOUT = 2500  # used for checking BLE Server timeout
 
-FILEDIR = f"{pathlib.Path(__file__).parent.resolve()}/"
-Log.log_filename=f"{FILEDIR}btwifiset.log"
-#uncomment this next line when debugging to print log messages to console:
-Log.print_to_console = True
-
 # **************************************************************************
 
 class ConfigData:
     '''
-    BLE Server has the ability to start upon booth (start_on_booth = yes)
-    or to start when a button is pressed:
-        - start_on_booth = no
-        - Pin = BCM GPIO pin number of the button
-        - On_status: 1 or 0 - indicate state when button is pressed.
-    Either way, a timeout exists that will shutdown the BLE Server 
-        if it does not receives commands from the iphone app within this timeout period.
+    A timeout exists that will shutdown the BLE Server 
+        if it does not receive commands from the iphone app within this timeout period.
         - BLE_shutdown_time = xx, where xx is the number of minutes for the time out.
         - insert "never" if it nevers time out
     Note that every time a command is received from the ios iphone app 
     - the time out period is reset to zero.
     '''
     START = 0  #time at which we start counting BLE Server usage.
-    PIN =0
-    PIN_STATUS = 1
-    TIMEOUT = 15*60  #default timeout in seconds - 15 minutes
-    HAS_TIMEOUT = True
-    BOOT_START = True
+    TIMEOUT = 0
 
     @staticmethod
     def initialize():
-        _config = configparser.ConfigParser()
-        try:
-            _config.read(f"{FILEDIR}btwifiset.ini")
-            _default = _config['DEFAULT']
-            ConfigData.TIMEOUT = int(float(_default['timeout']))* 60
-        except:
-            ConfigData.HAS_TIMEOUT = False  # defaults to start on booth with no timeout
-        try:
-            if _default['start_on_booth'] is not None:
-                ConfigData.BOOT_START = _default.getboolean('start_on_booth')
-        except:
-            pass  #default set above is True
-        if not ConfigData.BOOT_START:
-            # any error in ini file for pin defaults to starting on boot
-            try:
-                _gpio = _config['GPIO']
-                if _gpio['Pin'] is None:
-                    ConfigData.BOOT_START = True
-                else:
-                    ConfigData.PIN = _gpio.getint('Pin')
-            except: 
-                ConfigData.BOOT_START = True
-            try: 
-                if int(_gpio['On_state']) == 0:
-                    ConfigData.PIN_STATUS = 0
-            except:
-                pass  # pin on state remains at 1 default - and may be ignore if pin was error
-        Log.log(f'has_timeOut: {ConfigData.HAS_TIMEOUT}  timeout: {ConfigData.TIMEOUT/60} , start on booth: {ConfigData.BOOT_START}')
-        Log.log(f'(not implemented yet) Init Pin: {ConfigData.PIN} , pin on state: {ConfigData.PIN_STATUS}')
-        # since pin not yet implemented - always set start on booth at this time:
-        ConfigData.BOOT_START = True
+        parser = argparse.ArgumentParser(
+            prog="btwifi",
+            description="Configure WiFi over BLE")
+
+        parser.add_argument("--timeout", help="Server timeout in minutes")
+        parser.add_argument("--syslog", help="Log messages to syslog", action='store_true')
+        parser.add_argument("--console", help="Log messages to console", action='store_true')
+        parser.add_argument("--logfile", help="Log messages to specified file")
+        args = parser.parse_args()
+
+        ConfigData.TIMEOUT = 15*60 if args.timeout is None else int(args.timeout)*60
+        Log.initialize(args.syslog, args.console, args.logfile)
 
     @staticmethod
     def reset_timeout():
@@ -447,9 +415,6 @@ class WifiSetService(Service):
                 else:
                     Log.log(f'adding FAIL to notifications')
                     self.notifications.append('FAIL')
-        
-
-
 
 
 class WifiDataCharacteristic(Characteristic):
@@ -554,22 +519,19 @@ def check_button():
 def timeout_manager():
     #Log.log(f'checking timeout {ConfigData.START}')
     if ConfigData.check_timeout():
-        Log.log("BLE Server has timeout - exiting...")
+        Log.log("BLE Server timeout - exiting...")
         sleep(0.2)
         mainloop.quit()
         return False
     else:
         return True
 
-Log.log("******* Staring BTwifiSet - version date:April 22, 2022 ********\n")
 signal.signal(signal.SIGTERM, graceful_quit)
 ConfigData.initialize()
-if not ConfigData.BOOT_START:
-    while not check_button():
-        sleep(1)
+Log.log("** Starting BTwifiSet - version date:xxxx-xx-xx **\n")
+Log.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
 
-# if we get here - either start on boot or button was pressed - start BLE server
-Log.log("staring BLE Server")
+Log.log("starting BLE Server")
 ConfigData.reset_timeout()
 mainloop = GLib.MainLoop()
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -587,19 +549,11 @@ app.register()
 
 Advertise(0).register()
 
-    
 try:
-    if ConfigData.HAS_TIMEOUT:
-        GLib.timeout_add(BLE_SERVER_GLIB_TIMEOUT, timeout_manager)
+    GLib.timeout_add(BLE_SERVER_GLIB_TIMEOUT, timeout_manager)
     Log.log("starting main loop")
     mainloop.run()
 except KeyboardInterrupt:
     Log.log("stopping main loop")
     sleep(1)
     mainloop.quit()
-
-
-    
-
-
-

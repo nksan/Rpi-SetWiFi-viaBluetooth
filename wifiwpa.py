@@ -101,7 +101,7 @@ class WPAConf:
     
     '''
     def __init__(self):
-        self.wpa_supplicant_ssids={}
+        #self.wpa_supplicant_ssids={}  # get_wpa_supplicant_ssids does this
         self._connected_network = Wpa_Network('')  #blank ssid means AP is not connected
         self._connected_AP = AP() # holds AP/signal info on currently connected network
         self.get_wpa_supplicant_ssids()
@@ -153,7 +153,7 @@ class WPAConf:
         """
         self.wpa_supplicant_ssids = {}
         filename = "/etc/wpa_supplicant/wpa_supplicant.conf"
-        Log.log('opening file...')
+        Log.log(f'opening {filename}')
         try:
             f = open(filename, 'r')
             data = f.read()
@@ -175,11 +175,11 @@ class WPAConf:
             except:
                 pass  #ignore ssid
 
-        self.retireve_network_numbers() # get the network numbers seen by wpa_cli
+        self.retrieve_network_numbers() # get the network numbers seen by wpa_cli
         #get the ssid to which pi is currently connected
-        current_ssid = subprocess.run(" iwgetid -r", 
+        current_ssid = subprocess.run("/sbin/iwgetid --raw", 
                         shell=True,capture_output=True,encoding='utf-8',text=True).stdout.strip()
-        Log.log(f'iwgetid says: {current_ssid} is connected')
+        if current_ssid != "": Log.log(f'iwgetid says: WiFi Network {current_ssid} is connected')
         self._connected_network = Wpa_Network('')  #blank ssid means AP is not connected
         self._connected_AP = AP() # holds AP/signal info on currently connected network
         if len(current_ssid)>0:
@@ -188,16 +188,16 @@ class WPAConf:
             except:
                 pass #connected network is not in wpa_supplicant.  no point showing to user as we don't know password etc.
 
-    def retireve_network_numbers(self,ssid=''):
+    def retrieve_network_numbers(self,ssid=''):
         '''
-        retrieves the current network numbers seen by wpa_li on RPI
+        retrieves the current network numbers seen by wpa_cli on RPI
         if ssid is passed, returns its number
         '''
         network_number = -1
         out = subprocess.run("wpa_cli -i wlan0 list_networks", shell=True,capture_output=True,encoding='utf-8',text=True).stdout
         ssids = re.findall('(\d+)\s+([^\s]+)', out, re.DOTALL)  #\s+([^\s]+)
         #ssids is returned as: [('0', 'BELL671'), ('1', 'nksan')] - network number, ssid
-        Log.log(f'List of current WPA Networks fetched: {ssids}')
+        Log.log(f'Networks configured in wpa_supplicant.conf: {ssids}')
         try: 
             for num, listed_ssid in ssids:
                 if listed_ssid == ssid:
@@ -259,7 +259,7 @@ class WifiManager:
     '''
 
     def __init__(self):
-        self.wpa = WPAConf()  #this fteches the list of networks in wpa_supplicant.conf on init
+        self.wpa = WPAConf()  #this fetches the list of networks in wpa_supplicant.conf on init
         self.list_of_APs=[]
 
     def scan(self):
@@ -380,7 +380,8 @@ class WifiManager:
         if pw == "NONE": 
             psk = 'psk=NONE' # for open network - ios will pass NONE as password
         if len(pw)>=8 and len(pw)<=63:
-            out = subprocess.run(["wpa_passphrase",f'{ssid}',f'{pw}'],
+            #out = subprocess.run(["wpa_passphrase",f'{ssid}',f'{pw}'],
+            out = subprocess.run(f'wpa_passphrase {ssid} {pw}',
                             capture_output=True,encoding='utf-8',text=True).stdout
             temp_psk = re.findall('(psk=[^\s]+)\s+\}', out, re.DOTALL)
             if len(temp_psk)>0:
@@ -394,7 +395,7 @@ class WifiManager:
             Log.log(f'changing Password for  {network.ssid} to  {pw}')
             psk = self.get_psk(network.ssid,pw)
             if len(psk) == 0:
-                Log.log(f"illegal length password: {len(pw)}")
+                Log.log(f"Password {pw} has an illegal length: {len(psk)}")
                 return False
 
             ssid_num = str(network.number)
@@ -445,7 +446,7 @@ class WifiManager:
         else:
             psk = self.get_psk(ssid,pw)
         if len(psk) == 0:
-                Log.log(f"illegal length password len{pw}")
+                Log.log(f"Password {pw} has an illegal length: {len(pw)}")
                 return None
         network_num=''
         try:
@@ -491,7 +492,7 @@ class WifiManager:
 
 
 
-    def connect_wait(self, num, timeout = 10):
+    def connect_wait(self, num, timeout=10):
         """ attempts to connect to network number (passed as a string)
         returns after 5 second + time out with False if connection not established, or True, as sonn as it is."""
         p=subprocess.Popen(f"wpa_cli -i wlan0 select_network {num}", shell=True)
@@ -506,11 +507,12 @@ class WifiManager:
             n+=1
             time.sleep(1)
         try:
-            msg = f'wait loop exited after {n+5} seconds with ssid: --{connected_ssid}--\n'
-            f = open(f"{FILEDIR}wificonnect.log",'a+')
-            f.writelines(f'{datetime.now()}\n')
-            f.writelines(msg)
-            f.close()
+            msg = f'Wait loop exited after {n+5} seconds with SSID: --{connected_ssid}--\n'
+            Log.log(msg)
+            #f = open(f"{FILEDIR}wificonnect.log",'a+')
+            #f.writelines(f'{datetime.now()}\n')
+            #f.writelines(msg)
+            #f.close()
         except Exception as e:
             Log.log('exception: {e}')
         return len(connected_ssid) > 0
@@ -589,10 +591,9 @@ class WifiManager:
 
     def wifi_connect(self,up = True):
         """
-        this disconnects the wifi of the RPI - calls a file that uses sudo with chmod 777
-        to run sudo ip link set wlan0 up or down
+        Set wlan0 link up or down 
         """
-        arr = [f"{PYTHONEXEC}",f"{FILEDIR}wifiup.py"]
+        """arr = [f"{PYTHONEXEC}",f"{FILEDIR}wifiup.py"]
         Log.log(f'path to file : {arr}')
         msg = 'bringing wifi up '
         if not up:
@@ -602,22 +603,21 @@ class WifiManager:
             p = subprocess.Popen(arr)
             p.wait()
         except Exception as e:
-            msg += e
-            Log.log(f'ERROR: {e}')
-        f = open(f"{FILEDIR}wificonnect.log",'a')
-        f.writelines(f'{datetime.now()}\n')
-        f.writelines(msg)
-        f.close()
-
-
-    
-
-
+           Log.log("error caught: " + e)
+        """
+        cmd = "/bin/ip link set wlan0 up" if up else "/bin/ip link set wlan0 down"
+        msg = "Bring WiFi up" if up else "Bring WiFi down"
+        Log.log(msg)
+        try :
+            r = subprocess.run(cmd, shell=True, text=True, timeout=10)
+        except Exception as e:
+            Log.log("error caught: " + e)
+        
 
 
 if __name__ == "__main__":
     """
-    if no arguments are passed - it means external (ios) has requested the lsit of AP only
+    if no arguments are passed - it means external (ios) has requested the list of AP only
     if only ssid is passed - no password - it means to connect to ssid already in wpa_supplicant.conf 
     if ssid and password is passed:
         either ssid is not in wpa_supplicant.conf - call add_network to add it
