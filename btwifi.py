@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 from os import stat
 import argparse
 import dbus
@@ -507,6 +506,7 @@ class InfoWifiDescriptor(Descriptor):
         return value
 
 
+
 def graceful_quit(signum,frame):
     Log.log("stopping main loop on SIGTERM received")
     sleep(0.5)
@@ -526,6 +526,7 @@ def timeout_manager():
     else:
         return True
 
+
 signal.signal(signal.SIGTERM, graceful_quit)
 ConfigData.initialize()
 Log.log("** Starting BTwifiSet - version date:xxxx-xx-xx **\n")
@@ -538,10 +539,10 @@ dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
 Blue.set_adapter()
 Blue.bus.add_signal_receiver(Blue.properties_changed,
-			dbus_interface = "org.freedesktop.DBus.Properties",
-			signal_name = "PropertiesChanged",
-			arg0 = "org.bluez.Device1",
-			path_keyword = "path")
+            dbus_interface = "org.freedesktop.DBus.Properties",
+            signal_name = "PropertiesChanged",
+            arg0 = "org.bluez.Device1",
+            path_keyword = "path")
             
 app = Application()
 app.add_service(WifiSetService(0,mainloop))
@@ -557,3 +558,6 @@ except KeyboardInterrupt:
     Log.log("stopping main loop")
     sleep(1)
     mainloop.quit()
+
+
+
