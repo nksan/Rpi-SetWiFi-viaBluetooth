@@ -381,11 +381,11 @@ class WifiManager:
         if pw == "NONE": 
             psk = 'psk=NONE' # for open network - ios will pass NONE as password
         if len(pw)>=8 and len(pw)<=63:
-            #out = subprocess.run(["wpa_passphrase",f'{ssid}',f'{pw}'],
-            out = subprocess.run(f'wpa_passphrase {ssid} {pw}',
+            #out = subprocess.run(f'wpa_passphrase {ssid} {pw}',
+            out = subprocess.run(["wpa_passphrase",f'{ssid}',f'{pw}'],
                             capture_output=True,encoding='utf-8',text=True).stdout
             temp_psk = re.findall('(psk=[^\s]+)\s+\}', out, re.DOTALL)
-            if len(temp_psk)>0:
+            if len(temp_psk)>0: 
                 psk = temp_psk[0]
         Log.log(f'psk from get_psk: {psk}')
         return psk

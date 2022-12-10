@@ -435,11 +435,11 @@ class WifiManager:
         if pw == "NONE": 
             psk = 'psk=NONE' # for open network - ios will pass NONE as password
         if len(pw)>=8 and len(pw)<=63:
-            #out = subprocess.run(["wpa_passphrase",f'{ssid}',f'{pw}'],
-            out = subprocess.run(f'wpa_passphrase {ssid} {pw}',
+            #out = subprocess.run(f'wpa_passphrase {ssid} {pw}',
+            out = subprocess.run(["wpa_passphrase",f'{ssid}',f'{pw}'],
                             capture_output=True,encoding='utf-8',text=True).stdout
             temp_psk = re.findall('(psk=[^\s]+)\s+\}', out, re.DOTALL)
-            if len(temp_psk)>0:
+            if len(temp_psk)>0: 
                 psk = temp_psk[0]
         mLOG.log(f'psk from get_psk: {psk}')
         return psk
@@ -1210,7 +1210,7 @@ def timeout_manager():
 
 signal.signal(signal.SIGTERM, graceful_quit)
 ConfigData.initialize()
-mLOG.log("** Starting BTwifiSet - version date:xxxx-xx-xx **\n")
+mLOG.log("** Starting BTwifiSet - version date: December 10 2022 **\n")
 mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
 
 mLOG.log("starting BLE Server")

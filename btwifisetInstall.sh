@@ -47,26 +47,25 @@ A list of known country codes can be found in /usr/share/zoneinfo/iso3166.tab
 # Main code
 #
 [ $EUID -eq 0 ] && sudo="" || sudo="sudo"
-srcurl="https://www.normfrenette.com"
-tarball="btwifiset.tar.gz"
+srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/main"
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
 askdefault "btwifiset install directory" btwifidir "/usr/local/btwifiset"
 [ "$btwifidir" == "" ] && btwifidir="/usr/local/btwifiset"
-$sudo mkdir -p $btwifidir/my_logger
-echo "Download and expand btwifiset tarball from the internet to $btwifidir"
-$sudo wget $srcurl/$tarball -O $btwifidir/$tarball -o /dev/null
-wsts=$?
-if [ -f $btwifidir/$tarball -a $wsts ]
-then
-    $sudo tar --directory $btwifidir -xzvf $btwifidir/$tarball > /dev/null
-    tsts=$?
-    [ ! $tsts ] && errexit "? Error returned from tar command ($tsts)"
-else
-    echo "? Unable to download btwifiset from $srcurl/$tarball (Error $wsts)"
-    errexit "? btwifiset cannot be installed"
-fi
+$sudo mkdir -p $btwifidir
+echo "Download btwifiset to $btwifidir"
+for f in btwifiset.py
+do
+    #Could also use curl: $sudo curl --fail --silent --show-error -L $srcurl/$f -o $btwifidir/$f
+    $sudo wget $srcurl/$f --output-document=$btwifidir/$f
+    wsts=$?
+    if [ ! $wsts ]
+    then
+	echo "? Unable to download btwifiset from $srcurl (Error $wsts)"
+	errexit "? btwifiset cannot be installed"
+    fi
+done
 
 # Handle wpa_supplicant.conf before installing python bits b/c potential user bail
 wpa="/etc/wpa_supplicant/wpa_supplicant.conf"
@@ -134,7 +133,7 @@ After=hciuart.service bluetooth.target
 
 [Service]
 Type=simple
-ExecStart=/bin/python3 $btwifidir/btwifi.py
+ExecStart=/bin/python3 $btwifidir/btwifiset.py --syslog
 
 [Install]
 WantedBy=multi-user.target
