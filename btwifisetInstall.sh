@@ -143,14 +143,21 @@ WantedBy=multi-user.target
 EOF
 ) | $sudo bash -c "cat > /etc/systemd/system/btwifiset.service"
 #
-# Link bluetooth.target.wants to the copy of bluetooth.service we made in /etc/systemd/system
+# Link bluetooth.target.wants and dbus-org.bluez.service to the copy of bluetooth.service we made in /etc/systemd/system
 #
 if [ -f /etc/systemd/system/bluetooth.target.wants/bluetooth.service ]
 then
     $sudo rm -f /etc/systemd/system/bluetooth.target.wants/bluetooth.service
     $sudo ln -s /etc/systemd/system/bluetooth.service /etc/systemd/system/bluetooth.target.wants/bluetooth.service
 fi
-
+if [ -f /etc/systemd/system/dbus-org.bluez.service ]
+then
+    $sudo rm -f /etc/systemd/system/dbus-org.bluez.service
+    $sudo ln -s /etc/systemd/system/bluetooth.service /etc/systemd/system/dbus-org.bluez.service
+fi
+#
+# Enable services to start on system boot
+#
 $sudo systemctl enable hciuart btwifiset
 
 echo "The system must be restarted before btwifiset will work"
