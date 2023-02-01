@@ -1210,7 +1210,7 @@ def timeout_manager():
 
 signal.signal(signal.SIGTERM, graceful_quit)
 ConfigData.initialize()
-mLOG.log("** Starting BTwifiSet - version date: December 10 2022 **\n")
+mLOG.log("** Starting BTwifiSet - version date: February 01 2023 **\n")
 mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
 
 mLOG.log("starting BLE Server")
