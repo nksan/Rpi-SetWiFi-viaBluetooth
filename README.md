@@ -8,10 +8,12 @@ For the ios app to work, the file btwifiset.py in this repo must be installed on
 This creates a Python BLE Server for RPi which then accepts commands to set the  wifi (SSID) from the ios app - via bluetooth.
 
 The installation is somewhat involved because:   
-    - The Python code requires a number of packages to run (dBUS, GLib, pip) 
-    - A systemD service needs to be created so the code runs on boot. 
-        (presumably you are using this on a headless RPi - with no other way to set the wifi...)
-An installer is provided here: btwifisetinstall.sh
+- The Python code requires a number of packages to run (dBUS, GLib, pip)   
+- A systemD service needs to be created so the code runs on boot.    
+(presumably you are using this on a headless RPi - with no other way to set the wifi...)  
+
+An installer is provided here: btwifisetinstall.sh  
+
 To run the installer:  SSH into your headless Pi - or if desktop version open a terminal window, and run: (this install btwifiset.py in /usr/local/btwifiset directory)
 
 curl  -L https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/main/btwifisetInstall.sh | bash
