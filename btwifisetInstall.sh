@@ -114,14 +114,14 @@ country=""
 getcountrycode
 
 echo "> Download btwifiset to $btwifidir"
-for f in btwifiset.py
+for f in btwifiset.py btpassword.py
 do
     #Using curl: $sudo curl --fail --silent --show-error -L $srcurl/$f -o $btwifidir/$f
     $sudo wget $srcurl/$f --output-document=$btwifidir/$f
     wsts=$?
     if [ ! $wsts ]
     then
-	echo "? Unable to download btwifiset from $srcurl (Error $wsts)"
+	echo "? Unable to download $f from $srcurl (Error $wsts)"
 	errexit "? btwifiset cannot be installed"
     fi
     $sudo chmod 755 $btwifidir/$f
@@ -184,63 +184,63 @@ EOF
 fi
 
 # Install btpasswd.py
-echo "> Create $btwifidir/btpasswd.py"
-	(cat <<EOF
-#!/usr/bin/python3
+# echo "> Create $btwifidir/btpasswd.py"
+# 	(cat <<EOF
+# #!/usr/bin/python3
 
-import argparse
+# import argparse
 
-class PW:
-    PWFILE = "crypto"
+# class PW:
+#     PWFILE = "crypto"
 
-    def __init__(self):
-        self.password = self.getPassword()
+#     def __init__(self):
+#         self.password = self.getPassword()
 
 
-    def getPassword(self):
-        #if crypto file exists but password is empty string - return None as if file did not exist
-        try:
-            with open(PW.PWFILE, 'r', encoding="utf-8") as f:
-                pw = f.readline().rstrip()
-                return pw if len(pw) > 0 else None     
-        except:
-            return None
+#     def getPassword(self):
+#         #if crypto file exists but password is empty string - return None as if file did not exist
+#         try:
+#             with open(PW.PWFILE, 'r', encoding="utf-8") as f:
+#                 pw = f.readline().rstrip()
+#                 return pw if len(pw) > 0 else None     
+#         except:
+#             return None
     
-    def savePassword(self,pw):
-        if pw is not None:
-            with open(PW.PWFILE,'w+',encoding="utf-8") as f:
-                f.write(pw)
+#     def savePassword(self,pw):
+#         if pw is not None:
+#             with open(PW.PWFILE,'w+',encoding="utf-8") as f:
+#                 f.write(pw)
 
-    def userPassword(self):
-        new_password = ""
-        done_once = False
-        while len(new_password) < 4:
-            print("\nNote:password must be 4 characters min, leading and trailing blanks are removed.")
-            if done_once: print("\npassword invalid! - please try again.")
-            new_password = input("Please enter a password [X to quit]:").strip()
-            if new_password.lower() == "x": 
-                print("password was not changed")
-                return
-            done_once = True
-        print(f"New password is: {new_password}")
-        self.savePassword(new_password)
+#     def userPassword(self):
+#         new_password = ""
+#         done_once = False
+#         while len(new_password) < 4:
+#             print("\nNote:password must be 4 characters min, leading and trailing blanks are removed.")
+#             if done_once: print("\npassword invalid! - please try again.")
+#             new_password = input("Please enter a password [X to quit]:").strip()
+#             if new_password.lower() == "x": 
+#                 print("password was not changed")
+#                 return
+#             done_once = True
+#         print(f"New password is: {new_password}")
+#         self.savePassword(new_password)
 
 
-if __name__ == "__main__":
-    pwc = PW()
-    if pwc.password is None:
-        print("Password is not set yet.")
-        pwc.userPassword()
-    else:
-        print(f"current password is: {pwc.password}")
-        answer = input("Do you want to change it? [y/n]")
-        if answer and (answer[0].lower() == 'y'):
-             pwc.userPassword()
-        else :
-             print("password was not changed")
-EOF
-	) | $sudo bash -c "cat > $btwifidir/btpasswd.py"
-$sudo chmod 755 $btwifidir/btpasswd.py
+# if __name__ == "__main__":
+#     pwc = PW()
+#     if pwc.password is None:
+#         print("Password is not set yet.")
+#         pwc.userPassword()
+#     else:
+#         print(f"current password is: {pwc.password}")
+#         answer = input("Do you want to change it? [y/n]")
+#         if answer and (answer[0].lower() == 'y'):
+#              pwc.userPassword()
+#         else :
+#              print("password was not changed")
+# EOF
+# 	) | $sudo bash -c "cat > $btwifidir/btpasswd.py"
+# $sudo chmod 755 $btwifidir/btpasswd.py
 
 # Modify bluetooth service. Copy it to /etc/systemd/system, which will be used before the one in /lib/systemd/system
 # Leaving the one in /lib/systemd/system as delivered. Good practice!
