@@ -155,10 +155,6 @@ pyver=$((python3 --version) | (read p version junk ; echo ${version%.*}))  # Thi
 pymajver=${pyver%.*}
 pycomponents="python${pymajver}-gi libdbus-glib-1-dev libpython${pyver}-dev"
 
-#since cryptography is needed - always install pip3:
-$sudo apt install python${pymajver}-pip
-#install cryptography module
-$sudo pip3 install cryptography
 
 # If python3-dbus is available, install that. If not, install python3-pip and then we'll pip install dbus-python
 isdbusok && pycomponents="${pycomponents} python${pymajver}-dbus" || pycomponents="${pycomponents} python${pymajver}-pip"
