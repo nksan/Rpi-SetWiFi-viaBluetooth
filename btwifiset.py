@@ -11,6 +11,7 @@ import dbus.mainloop.glib
 import dbus.service
 import json
 import os
+import pathlib
 import random
 import re
 import signal
@@ -1186,7 +1187,7 @@ class WifiManager:
         out = subprocess.run("nmcli", shell=True,capture_output=True,encoding='utf-8',text=True).stderr
         network_manager_is_running = (out == "")
         out += 'Network Manager is running' if network_manager_is_running else ''
-        mLOG.log(f"nmcli test: returns {network_manager_is_running} : {out}")
+        mLOG.log(f"test: Network Manager is running = {network_manager_is_running}")
         return network_manager_is_running
 
 
@@ -1274,11 +1275,11 @@ class WifiManager:
             mLOG.log("error caught: " + e)
 
 
-
+FILEDIR = f"{pathlib.Path(__file__).parent.resolve()}/"
 
 class PiInfo:
-    PWFILE = "crypto"
-    INFOFILE = "infopi.json"
+    PWFILE = FILEDIR+"crypto"
+    INFOFILE = FILEDIR+"infopi.json"
 
     """
     variables and storing needs:
@@ -1306,6 +1307,9 @@ class PiInfo:
                 self.locked = dict["locked"]
                 self.last_nonce = dict["last_nonce"]
             return True  
+        except FileNotFoundError:
+            mLOG.log("file {PiInfo.INFOFILE} not created yet - using default values")
+            return False
         except Exception as ex:
             mLOG.log(f"Error reading file {PiInfo.INFOFILE}: {ex}") 
             return False
@@ -1326,7 +1330,7 @@ class PiInfo:
             with open(PiInfo.PWFILE, 'r', encoding="utf-8") as f:
                 pw = f.readline().rstrip()
                 return pw if len(pw) > 0 else None     
-        except:
+        except Exception as ex:
             return None
 
 
@@ -2660,6 +2664,8 @@ class InfoWifiDescriptor(Descriptor):
 class BLEManager:
 
     def __init__(self):
+        signal.signal(signal.SIGTERM, self.graceful_quit)
+        ConfigData.initialize()
         self.cryptoManager = BTCryptoManager()
         self.mainloop = GLib.MainLoop()
         self.counter = 0
@@ -2703,8 +2709,6 @@ class BLEManager:
     
 
     def start(self):
-        signal.signal(signal.SIGTERM, self.graceful_quit)
-        ConfigData.initialize()
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
         mLOG.log("** Version date: May 24 2024 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
