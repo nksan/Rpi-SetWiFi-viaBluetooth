@@ -88,7 +88,7 @@ function isdbusok() {
 # Main code
 #
 [ $EUID -eq 0 ] && sudo="" || sudo="sudo"
-srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/main"
+srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/version2"
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
@@ -101,7 +101,7 @@ btpwd=$(hostname)
 if [[ ! -f $btwifidir/crypto ]] || [[ ! -s $btwifidir/crypto ]]
 then
     rm -f $btwifidir/crypto
-    askdefault "Bluetooth security key" btpwd "$btpwd"
+    askdefault "Bluetooth password (encryption key)" btpwd "$btpwd"
 	(cat <<EOF
 $btpwd
 EOF
