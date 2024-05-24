@@ -1,42 +1,44 @@
-from os import stat
+
 import argparse
 import dbus
 import dbus.service
 import dbus.mainloop.glib
 from gi.repository import GLib
 from time import sleep
-import wifiwpa as wifi
 from my_logger import mLOG as Log
-#from datetime import datetime
-#import pathlib
 import signal
-import syslog
 import time
+import json
+import wifiwpa as wifi
+import btcrypto as crypt
+import subprocess
 
-
-
-"""
-note on separator / bytes handling:
-this returns assigns a byte to x:  
-x = b'\x1e'
-this converts it to string - but is an unprintable character
-y = x.decode()
-print(y) shows nothing on the console because b'\x1e' is an unprintable character
-however:
-z = f'{x} or,
-z = str(x)
-does not work it converts b'\x1e' to the string literal 
-if I do:
-a = 'A'+y and then encode it:
-A.encode() --> this yields two bytes:  41 and 1E  as expected.
-"""
 
 SEPARATOR_HEX = b'\x1e'
-SEPARATOR = SEPARATOR_HEX.decode()  # string representation can be concatenated or use in split()
+SEPARATOR = SEPARATOR_HEX.decode()  # string representation can be concatenated or use in split function
 NOTIFY_TIMEOUT = 1000  #in ms - used for checking notifications
 BLE_SERVER_GLIB_TIMEOUT = 2500  # used for checking BLE Server timeout
 
+
 # **************************************************************************
+
+class BTDbusSender(dbus.service.Object):
+    #only for BT process
+    def __init__(self):
+        #this is not needed since mainloop is setup already for dbus: bluetooth
+        # self.mainloop = GLib.MainLoop()
+        # dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus_name = dbus.service.BusName('com.normfrenette.bt', bus=dbus.SessionBus())
+        dbus.service.Object.__init__(self, bus_name,'/com/normfrenette/bt')
+
+    @dbus.service.signal('com.normfrenette.bt')
+    def send_signal_on_dbus(self,msg):
+        Log.log(f'bt sending button signal: {msg}')
+
+    def send_signal(self,msg):
+        self.send_signal_on_dbus(msg)
+
+# *************************************************************************   
 
 class ConfigData:
     '''
@@ -48,7 +50,8 @@ class ConfigData:
     - the time out period is reset to zero.
     '''
     START = 0  #time at which we start counting BLE Server usage.
-    TIMEOUT = 0
+    TIMEOUT = 0 #this is in seconds
+    
 
     @staticmethod
     def initialize():
@@ -77,13 +80,89 @@ class ConfigData:
         else:
             return False
 
-# *************************************************************************    
+# *************************************************************************   
+
+class Notifications:
+    """
+    
+    """
+
+    def __init__(self,cryptoMgr):
+        self.cryptomgr = cryptoMgr # hold a reference to the cryptoMgr in wifiset service
+        self.notifications = []  #array of (encoded) notifications to send - in bytes (not string)
+        self.unlockingMsg = b''
+        #contains the current encoded unlocking messgae to test against 
+        #   to detect if pi is unlocking after being locked - following user request
+        #see notifications in wifiCharasteristic for handling.
+        # 
+        # 
+        # msg_bytes = self.service.cryptomgr.encrypt(msg)
+
+    def setNotification(self,msg):
+        #msg must encode in utf8 to less than 182 bytes or ios will truncate
+        msg_to_send = self.cryptomgr.encrypt(SEPARATOR + msg)
+        if msg == "Unlocking":
+            self.unlockingMsg = msg_to_send
+        else:
+            self.unlockingMsg = b''
+        self.notifications.append(msg_to_send)
+
+    @staticmethod
+    def make_chunks(msg,to_send):
+        msg.encode(encoding = 'UTF-8', errors = 'strict')
+        truncate_percentage = min(150/len(msg),1.0)
+        truncate_at = int(truncate_percentage * len(msg))
+        to_send.append(msg[0:truncate_at])
+        remainder = msg[truncate_at:]
+        if remainder: 
+            return(Notifications.make_chunks(remainder,to_send))
+        else:
+            return list(to_send)
+
+    def setJsonNotification(self,msgObject):
+        #msgObject must be an array 
+        #typically contains dictionaries - but could contain other json encodable objects
+        #The total length of the json string can exceed 182 bytes in utf8 encoding
+        #each chunk must have separator prefix to indicate it is a notification
+        # all chucnk except last chunk must have separator suffix to indicate more to come
+        json_str = json.dumps(msgObject)
+        chunked_json_str = Notifications.make_chunks(json_str,[])
+        for i in range(len(chunked_json_str)):
+            chunk_to_send = SEPARATOR + chunked_json_str[i]
+            if i+1 < len(chunked_json_str):
+                chunk_to_send += SEPARATOR
+            encrypted = self.cryptomgr.encrypt(chunk_to_send)
+            self.notifications.append(encrypted)
+
+
+def dbus_to_python(data):
+    '''
+        convert dbus data types to python native data types
+    '''
+    if isinstance(data, dbus.String):
+        data = str(data)
+    elif isinstance(data, dbus.Boolean):
+        data = bool(data)
+    elif isinstance(data, dbus.Int64):
+        data = int(data)
+    elif isinstance(data, dbus.Double):
+        data = float(data)
+    elif isinstance(data, dbus.Array):
+        data = [dbus_to_python(value) for value in data]
+    elif isinstance(data, dbus.Dictionary):
+        new_data = dict()
+        for key in data.keys():
+            new_data[dbus_to_python(key)] = dbus_to_python(data[key])
+        data = new_data
+    return data 
 
 class Blue:
     adapter_name = ''
     bus = None
     adapter_obj = None
     counter = 1
+    user_requested_endSession = False
+    user_ended_session = False
 
     @staticmethod
     def set_adapter():
@@ -92,8 +171,13 @@ class Blue:
         obj_interface=dbus.Interface(obj,'org.freedesktop.DBus.ObjectManager')
         all = obj_interface.GetManagedObjects()
         for item in all.items(): #this gives a list of all bluez objects
-            if 'org.bluez.Adapter1' in item[1].keys():
+            # Log.log(f"BlueZ Adapter name: {item[0]}")
+            # Log.log(f"BlueZ Adapter data: {item[1]}\n")
+            # Log.log("******************************\n")
+            if  (item[0] == '/org/bluez/hci0') or ('org.bluez.LEAdvertisingManager1' in item[1].keys() and 'org.bluez.GattManager1' in item[1].keys() ):
                 #this the bluez adapter1 object that we need
+                # Log.log(f"Found BlueZ Adapter name: {item[0]}\n")
+                
                 Blue.adapter_name = item[0]
                 Blue.adapter_obj = Blue.bus.get_object('org.bluez',Blue.adapter_name)
                 #turn_on the adapter - to make sure (on rpi it may already be turned on)
@@ -117,18 +201,42 @@ class Blue:
         Log.log(f"path:{path} \n changed:{changed}\n ",
                 level=Log.INFO)
         Blue.counter+=1
+        try: 
+            pythonDict =  dbus_to_python(changed)
+            """
+            this is implemented for future extension of the code.
+            if bluetooth channel is functioning correctly - and if pi is Locked, encryption is OK (phone app and pi use same key)
+            when phone app ends its session it sends a graceful disconnect message  which sets user_requested_endSession to True.
+            this is recognized here - and code could be inserted here to lauch actions when the user is at the source of the disconnection.
+            Note:  it is posible that phone app has disconnected for various reasons without sending the graceful disconnect message:
+                - bluetooth became out of range or channel is garbled/ineteference etc. (cannot send msg to be received here)
+                - Pi is locked and phone app does not have the password / has incorect password: Pi cannot decrypt messages
+                        and phone cannot decrypt responses.
+                In this case - disconnection is still detected here with:  not pythonDict["ServicesResolved"]
+                    but since user_requested_endSession is not set, it is not detected as a user controlled disconnection.
+            """
+            Blue.user_ended_session = Blue.user_requested_endSession and  (not pythonDict["ServicesResolved"]) 
+            if Blue.user_ended_session:
+                Log.log("User has ended BT session/disconnected")
+                #ADD ANY ACTION ON USER ENDING SESSION HERE
+                Blue.user_ended_session = False
+                Blue.user_requested_endSession = False
+        except:
+            pass
+        
 
 class Advertise(dbus.service.Object):
 
-    def __init__(self, index):
+    def __init__(self, index,bleMgr):
+        self.bleMgr = bleMgr
         self.properties = dict()
         self.properties["Type"] = dbus.String("peripheral")
         self.properties["ServiceUUIDs"] = dbus.Array([UUID_WIFISET],signature='s')
         self.properties["IncludeTxPower"] = dbus.Boolean(True)
         self.properties["LocalName"] = dbus.String("Wifiset")
-
         self.path = "/org/bluez/advertise" + str(index)
         dbus.service.Object.__init__(self, Blue.bus, self.path)
+        self.ad_manager = Blue.adv_mgr() 
 
 
     def get_properties(self):
@@ -143,21 +251,39 @@ class Advertise(dbus.service.Object):
 
     @dbus.service.method("org.bluez.LEAdvertisement1", in_signature='', out_signature='')
     def Release(self):
-        print ('%s: Released!' % self.path)
-
+        Log.log('%s: Released!' % self.path)
 
     def register_ad_callback(self):
         Log.log("GATT advertisement registered")
 
     def register_ad_error_callback(self,error):
+        #Failed to register advertisement: org.bluez.Error.NotPermitted: Maximum advertisements reached
+        global NEED_RESTART
+        try:
+            errorStr = f"{error}"
+            if "Maximum" in errorStr:
+                Log.log("advertisement Maximum error - restarting bluetooth service")
+                NEED_RESTART = True
+                self.bleMgr.quitBT()
+        except:
+            pass
         Log.log(f"Failed to register GATT advertisement {error}")
 
     def register(self):
-        #ad_manager = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, adapter),LE_ADVERTISING_MANAGER_IFACE)
-        ad_manager = Blue.adv_mgr()            
-        ad_manager.RegisterAdvertisement(self.get_path(), {},
+        Log.log("Registering advertisement")
+        self.ad_manager.RegisterAdvertisement(self.get_path(), {},
                                      reply_handler=self.register_ad_callback,
                                      error_handler=self.register_ad_error_callback)
+        
+    def unregister(self):
+        Log.log(f"De-Registering advertisement - path: {self.get_path()}")
+        self.ad_manager.UnregisterAdvertisement(self.get_path())
+        try:
+            dbus.service.Object.remove_from_connection(self)
+        except Exception as ex:
+            Log.log(ex)
+    
+
 
 class Application(dbus.service.Object):
     def __init__(self):
@@ -165,6 +291,7 @@ class Application(dbus.service.Object):
         self.services = []
         self.next_index = 0
         dbus.service.Object.__init__(self, Blue.bus, self.path)
+        self.service_manager = Blue.gatt_mgr()
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
@@ -194,10 +321,20 @@ class Application(dbus.service.Object):
     def register(self):
         #adapter = BleTools.find_adapter(self.bus)
         #service_manager = dbus.Interface(self.bus.get_object(BLUEZ_SERVICE_NAME, adapter),GATT_MANAGER_IFACE)
-        service_manager = Blue.gatt_mgr()
-        service_manager.RegisterApplication(self.get_path(), {},
+        self.service_manager.RegisterApplication(self.get_path(), {},
                 reply_handler=self.register_app_callback,
                 error_handler=self.register_app_error_callback)
+        
+    def unregister(self):
+        Log.log(f"De-Registering Application - path: {self.get_path()}")
+        for service in self.services:
+            service.deinit()
+        self.service_manager.UnregisterApplication(self.get_path())
+        try:
+            dbus.service.Object.remove_from_connection(self)
+        except Exception as ex:
+            Log.log(ex)
+        
 
 class Service(dbus.service.Object):
     #PATH_BASE = "/org/bluez/example/service"
@@ -209,6 +346,15 @@ class Service(dbus.service.Object):
         self.primary = primary
         self.characteristics = []
         dbus.service.Object.__init__(self, Blue.bus, self.path)
+
+    def deinit(self):
+        Log.log(f"De-init Service  - path: {self.path}")
+        for characteristic in self.characteristics:
+            characteristic.deinit()
+        try:
+            dbus.service.Object.remove_from_connection(self)
+        except Exception as ex:
+            Log.log(ex)
 
     def get_properties(self):
         return {
@@ -249,6 +395,15 @@ class Characteristic(dbus.service.Object):
         self.flags = flags
         self.descriptors = []
         dbus.service.Object.__init__(self, Blue.bus, self.path)
+
+    def deinit(self):
+        Log.log(f"De-init Characteristic  - path: {self.path}")
+        for descriptor in self.descriptors:
+            descriptor.deinit()
+        try:
+            dbus.service.Object.remove_from_connection(self)
+        except Exception as ex:
+            Log.log(ex)
 
     def get_properties(self):
         return {
@@ -312,6 +467,13 @@ class Descriptor(dbus.service.Object):
         self.chrc = characteristic
         dbus.service.Object.__init__(self, Blue.bus, self.path)
 
+    def deinit(self):
+        Log.log(f"De-init Descriptor  - path: {self.path}")
+        try:
+            dbus.service.Object.remove_from_connection(self)
+        except Exception as ex:
+            Log.log(ex)
+
     def get_properties(self):
         return {
                 "org.bluez.GattDescriptor1": {
@@ -330,7 +492,7 @@ class Descriptor(dbus.service.Object):
 
     @dbus.service.method("org.bluez.GattDescriptor1", in_signature='a{sv}', out_signature='ay')
     def ReadValue(self, options):
-        print ('Default ReadValue called, returning error')
+        Log.log('Default ReadValue called, returning error')
 
     @dbus.service.method("org.bluez.GattDescriptor1", in_signature='aya{sv}')
     def WriteValue(self, value, options):
@@ -340,30 +502,76 @@ class Descriptor(dbus.service.Object):
 #*******************************************************************************************************
 """here are uuid to use:"""
 UUID_WIFISET = 'fda661b6-4ad0-4d5d-b82d-13ac464300ce'  # service WifiSet
-UUID_WIFIDATA = 'e622b297-6bfe-4f35-938e-39abfb697ac3' # characteristic WifiData: to set SSID and password
-#UUID_INFO = '2f393677-9c68-4ea3-8e51-4f5e680b7c24'    # characteristic InfoWifi: received data from pi
-                                                      # such as list if AP, status of connection etc.
+UUID_WIFIDATA = 'e622b297-6bfe-4f35-938e-39abfb697ac3' # characteristic WifiData: may be encrypted - used for all wifi data and commands
+UUID_INFO = '62d77092-41bb-49a7-8e8f-dc254767e3bf'    # characteristic InfoWifi: pass instructions - in clear
 
 
 
 class WifiSetService(Service):
 
-    def __init__(self, index,main_loop):
+    def __init__(self, index,main_loop,cryptoMgr):
         self.mgr = wifi.WifiManager()
+        self.cryptomgr = cryptoMgr
         self.AP_list = []  #msg: signal|locked|in_supplicant|conected|SSID
-        self.notifications=[]
+        self.all_APs_dict = {"allAPs":[]}  #used in version of ios app / to read all AP via json object
+        self.notifications = Notifications(cryptoMgr)
         self.current_requested_ssid = ''
         self.current_requested_pw = ''
-        self.main_loop = main_loop
+        self.main_loop = main_loop #this exists only so characteristics can set it as their mainloop
         Service.__init__(self, index, UUID_WIFISET, True)
         self.add_characteristic(WifiDataCharacteristic(0,self))
+        self.add_characteristic(InfoCharacteristic(1,self))
+        self.sender = None
+        # self.startSendingButtons()
+        # self.startListeningToUserApp()
+        
+        
 
+    def getLockInfo(self):
+        #returns either MACid or LOCKNonceMACId
+        #Nonce must be exactly 12 bytes
+        self.cryptomgr.piInfo()
+
+    def appMsgHandler(self,msg):
+        """
+        this receives messgaes sent by user app - to be sent to iphone app via bluetooth
+        it only is needed if user has created text boxes/lists displays on the iphone (button app)
+        currently - only implements sending the text as notification
+        """
+        Log.log(f"received from user app: {msg}")
+        msg_arr = [].append(msg)
+        self.notifications.setJsonNotification(msg_arr)
+
+    def startSendingButtons(self):
+        self.sender = BTDbusSender()
+
+    def startListeningToUserApp(self):
+        dbus.SessionBus().add_signal_receiver(self.appMsgHandler,
+                        bus_name='com.normfrenette.apptobt',
+                        path ='/com/normfrenette/apptobt' )
+
+
+    def testDbusAppUser(self):
+        self.startSendingButtons()
+        self.startListeningToUserApp()
+        nc = 0
+        while nc < 4:
+            nc += 1
+            print("nc:",nc)
+            data = ""
+            if nc>1: data = f"data is {nc*1000}"
+            button_dict = {"code":f"ButtonCode{nc}", "data":data}
+            print(button_dict)
+            json_str = json.dumps(button_dict)
+            self.sender.send_signal(json_str)
+            time.sleep(.7)
 
     def register_SSID(self,val):
         ''' action taken when ios app writes to WifiData characteristic
         val is in the form [first_string,second_string, code] - see description in characteristic Write method
         ios sends either commands or request for connections to SSID:
             - commands: val[0] must be blank string. then val[1] contains the command
+                -note: command can be json string (user defined buttons)
             - connection_request: val[0] must not be blank and is the requested SSID
                                   val[1] is the password - which can be left blank
         Notifications to ios are one of three 
@@ -378,7 +586,8 @@ class WifiSetService(Service):
         Log.log(f'received from iphone: registering SSID {val}')
         #string sent must be SSID=xxxPW=yyy where xxx is the SSID and yyy is password
         #PW+ maybe omited
-        if val[0] == '':  #this means we received a request from ios (started with SEP)
+        if val[0] == '':  #this means we received a request/command from ios (started with SEP)
+            #********** WIFI management:
             if val[1] == 'OFF':
                 #call wifiwpa method to disconnect from current ssid
                 self.mgr.wifi_connect(False)
@@ -392,29 +601,177 @@ class WifiSetService(Service):
                 self.AP_list = []
                 for ap in returned_list:
                     self.AP_list.append(ap.msg())
-                self.notifications.append('READY')
+                """
+                to maintain compatibility with version 1 of the app, 
+                return READY on notifications then app reads one AP per rad on wifi characteristic call.
+                but version 2 of the app does not activiely read the AP.
+                it waits for the next Notification (after Ready) - which is the entire list of AP
+                sent a all+AP_dict json object (could be multiple chunks)
+                (note: in the original app this second notification will be ignored.)
+                """
+                self.all_APs_dict = {"allAps":self.AP_list}
+                self.notifications.setNotification('READY')
                 Log.log(f'READY: AP List for ios: {self.AP_list}')
-            else:
-                #may need to notify?
-                Log.log(f'Invalid SSID string {val}')
-                return
-        else:
-            Log.log(f'received requested SSID for connection: {val}')
-            self.current_requested_ssid = val[0]
-            self.current_requested_pw = val[1]
-            network_num = -1
-            #if user is connecting to an existing network - only the SSID is passed (no password) 
-            #   so network number is unknown (-1)
-            if self.current_requested_ssid:
-                Log.log(f'about to connect to ssid:{self.current_requested_ssid}, with password:{self.current_requested_pw}')
-                connected_ssid = self.mgr.request_connection(self.current_requested_ssid,self.current_requested_pw)
-                if len(connected_ssid)>0:
-                    Log.log(f'adding {connected_ssid} to notifications')
-                    self.notifications.append(connected_ssid)
-                else:
-                    Log.log(f'adding FAIL to notifications')
-                    self.notifications.append('FAIL')
+                self.notifications.setJsonNotification(self.all_APs_dict)
+                #this is needed for compatibility with verison 1 of the iphone app
+                ap_connected = self.mgr.wpa.connected_AP
+                if ap_connected != "0000":
+                    self.notifications.setNotification(ap_connected)
+                
+            
+            #*********** LOCK Management:
+            elif val[1] == "unknown":
+                # this handles the LOCK request which will have been sent encrypted while pi is unlocked
+                Log.log(f'sending result of unknown: {self.cryptomgr.unknown_response}')
+                self.notifications.setNotification(self.cryptomgr.unknown_response)
+            elif val[1] == "UnlockRequest":
+                #self.cryptomgr.disableCrypto() <- move to notification - must send response necrypted and then after disable crypto
+                self.notifications.setNotification('Unlocking')
+            elif val[1] == "CheckIn":
+                self.notifications.setNotification('CheckedIn')
 
+            # *************** extra info:
+            elif val[1] == "infoIP": 
+                ips = wifi.WifiUtil.get_ip_address()
+                self.notifications.setJsonNotification(ips)
+            elif val[1] == "infoMac": 
+                macs = wifi.WifiUtil.get_mac()
+                self.notifications.setJsonNotification(macs)
+            elif val[1] == "infoAP": 
+                ap = wifi.WifiUtil.scan_for_channel()
+                self.notifications.setJsonNotification(ap)
+            elif val[1] == "infoOther": 
+                oth = wifi.WifiUtil.get_other_info()
+                if oth is not None:
+                    try:
+                        strDict = {"other":str(oth["other"])}
+                        self.notifications.setJsonNotification(strDict)
+                    except:
+                        pass
+            elif val[1] == "infoAll": 
+                ips = wifi.WifiUtil.get_ip_address()
+                macs = wifi.WifiUtil.get_mac()
+                ap = wifi.WifiUtil.scan_for_channel()
+                oth = wifi.WifiUtil.get_other_info()
+                self.notifications.setJsonNotification(ips)
+                self.notifications.setJsonNotification(macs)
+                self.notifications.setJsonNotification(ap)
+                if oth is not None:
+                    try:
+                        strDict = {"other":str(oth["other"])}
+                        self.notifications.setJsonNotification(strDict)
+                    except:
+                        pass
+
+            # *************** Buttons:
+            elif val[1] == "HasButtons":
+                Log.log("setting up button sender")
+                self.startSendingButtons()
+            elif val[1] == "HasDisplays":
+                Log.log("setting up User App listener")
+                self.startListeningToUserApp()
+            # any other "command"  is assumed to be a button click or similar - to send to user app via dbus
+            # validate it here first before sending
+            else:
+                try:  #this fails with error if dict key does not exists (ie it is not a button click)
+                    button_info_dict = json.loads(val[1])
+                    if "code" in button_info_dict and "data" in button_info_dict:
+                        self.sender.send_signal(val[1])
+                    else:
+                        Log.log(f'Invalid SSID string {val}')
+                except: #this catch error on decoding json
+                    Log.log(f'Invalid SSID string {val}')
+                return
+            
+        #************ SSID connection management
+       
+        else:
+            try:
+                Log.log(f'received requested SSID for connection: {val}')
+                self.current_requested_ssid = val[0]
+                self.current_requested_pw = val[1]
+                network_num = -1
+                #if user is connecting to an existing network - only the SSID is passed (no password) 
+                #   so network number is unknown (-1)
+                if self.current_requested_ssid: 
+                    #Add Specific Codes and corresponding calls here.
+                    if self.current_requested_ssid == '#ssid-endBT#' and self.current_requested_pw == '#pw-endBT#':
+                        #user is ending BT session -  set up ending flag and wait for disconnection
+                        Blue.user_requested_endSession = True
+                        #return correct notification to signify to phone app to start disconnect process:
+                        self.notifications.setNotification('3111#ssid-endBT#')
+                        return
+                    #normal code to connect to a ssid
+                    Log.log(f'about to connect to ssid:{self.current_requested_ssid}, with password:{self.current_requested_pw}')
+                    connected_ssid = self.mgr.request_connection(self.current_requested_ssid,self.current_requested_pw)
+                    if len(connected_ssid)>0:
+                        Log.log(f'adding {connected_ssid} to notifications')
+                        self.notifications.setNotification(connected_ssid)
+                    else:
+                        Log.log(f'adding FAIL to notifications')
+                        self.notifications.setNotification('FAIL')
+            except Exception as ex:
+                Log.log("EERROR - ",ex)
+                
+
+
+class InfoCharacteristic(Characteristic):
+    def __init__(self, index,service):
+        Characteristic.__init__(self, index,UUID_INFO,["read"], service)
+        self.add_descriptor(InfoDescriptor(0,self))
+        self.mainloop = service.main_loop
+
+    def convertInfo(self,data):
+        #this is only use for logging 
+        msg = ""
+        try: 
+            prefix = data.decode("utf8")
+        except:
+            prefix = ""
+        if prefix == "NoPassword": return "NoPassword"
+
+        try:
+            prefix = data[0:4].decode("utf8")
+        except:
+            prefix = ""
+        if prefix == "LOCK" and len(data)>17:
+            msg = prefix
+            msg += str(int.from_bytes(data[4:16], byteorder='little', signed=False))
+            msg += data[16:].hex()
+            return msg
+        if  len(data)>13:
+            msg = str(int.from_bytes(data[0:12], byteorder='little', signed=False))
+            msg += data[12:].hex()
+        return msg
+
+
+    def ReadValue(self, options):
+        Log.log("Reading value on info chracteristic")
+        value = []
+        msg_bytes = self.service.cryptomgr.getinformation()
+        for b in msg_bytes:
+            value.append(dbus.Byte(b))
+        Log.log(f'ios is reading PiInfo: {self.convertInfo(msg_bytes)}')
+        return value
+
+
+class InfoDescriptor(Descriptor):
+    INFO_DESCRIPTOR_UUID = "2901"
+    INFO_DESCRIPTOR_VALUE = "Pi Information"
+
+    def __init__(self, index, characteristic):
+        Descriptor.__init__(
+                self, index, self.INFO_DESCRIPTOR_UUID,
+                ["read"],
+                characteristic)
+
+    def ReadValue(self, options):
+        value = []
+        desc = self.INFO_DESCRIPTOR_VALUE
+
+        for c in desc:
+            value.append(dbus.Byte(c.encode()))
+        return value
 
 class WifiDataCharacteristic(Characteristic):
 
@@ -427,17 +784,27 @@ class WifiDataCharacteristic(Characteristic):
 
 
     def info_wifi_callback(self):
-        '''mainloop checks here to see if there is something to "notify" iphone app
-        note: ios expects to see the SEPARATOR prefixed to notification - otherwise notification is discarded'''
+        '''
+        mainloop checks here to see if there is something to "notify" iphone app
+        note: ios expects to see the SEPARATOR prefixed to notification - otherwise notification is discarded
+        why is Unlocking the pi done here?
+            - when pi is unlocked and user request to unlock - pi will reply witj "unlocking"
+            - but this must be sent encrypted (iphone app expects it encrypted: only when received will it stop encryting)
+            therefore after it is sent whit encryption, only then is crypto disabled on the pi.
+        '''
         if self.notifying:
-            if len(self.service.notifications)>0:
-                Log.log(f'in notification: {self.service.notifications}')
-                strtemp = SEPARATOR + self.service.notifications.pop(0)
+            if len(self.service.notifications.notifications)>0:
+                thisNotification_bytes = self.service.notifications.notifications.pop(0)
+                #notification is in bytes, already has prefix separator and may be encrypted
+                needToUnlock = thisNotification_bytes == self.service.notifications.unlockingMsg
                 value=[]
-                for c in strtemp:
-                    value.append(dbus.Byte(c.encode()))
+                for b in thisNotification_bytes:
+                    value.append(dbus.Byte(b))
                 self.PropertiesChanged("org.bluez.GattCharacteristic1", {"Value": value}, [])
                 Log.log('notification sent')
+                if needToUnlock:
+                    self.service.cryptomgr.disableCrypto() 
+                
         return self.notifying
 
     def StartNotify(self):
@@ -445,9 +812,11 @@ class WifiDataCharacteristic(Characteristic):
         if self.notifying:
             return
         self.notifying = True
+        self.service.user_ending_session = False
         self.add_timeout(NOTIFY_TIMEOUT, self.info_wifi_callback)
 
     def StopNotify(self):
+        Log.log(f'ios has stopped notifications for wifi info')
         self.notifying = False
 
     def ReadValue(self, options):
@@ -457,32 +826,44 @@ class WifiDataCharacteristic(Characteristic):
         #Log.log(f'ios reading from {self.service.AP_list}')  
         if len(self.service.AP_list)>0:
             msg = self.service.AP_list.pop(0)
-        for c in msg:
-            value.append(dbus.Byte(c.encode()))
+
+        msg_bytes = self.service.cryptomgr.encrypt(msg)
+        for b in msg_bytes:
+            value.append(dbus.Byte(b))
         Log.log(f'ios is reading AP msg: {msg}')
         return value
 
     def WriteValue(self, value, options):
-        #this is called by Bluez when the clients writes a value to the server (RPI)
+        #this is called by Bluez when the client (IOS) has written a value to the server (RPI)
         """
         messages are either:
              - SEP + command (for controling wifi on pi or asking for AP list)
-             - ssid + SEP  (no paswword)
+             - ssid only (no SEP)
+             - ssid + SEP  (no paswword) : note: I dont think this occurs anymore
              - ssid + SEP + password + SEP + code    code = CP: call change_password; =AD: call add_network
         returns [first_string,second_string]
         everything that arrives before SEP goes into first_string
         everything that arrives after SEP goes into second string
-        for requests:  first_string is empty and request is in second string
+        for requests/commands:  first_string is empty and request is in second string
         if first_string is not empty: then it is an SSID for connection 
             which may or may not have a password in second string
         """
         received=['','']
         index = 0
-        for val in value:
-            if val == dbus.Byte(SEPARATOR_HEX):
-                index += 1
-            else:
-                received[index]+=str(val)
+        value_python_bytes = bytearray(value)
+        value_d = self.service.cryptomgr.decrypt(value_python_bytes)
+        bytes_arr = value_d.split(SEPARATOR_HEX)
+        received = []
+        for bb in bytes_arr:
+            received.append(bb.decode("utf8"))
+        # for val in value_d:
+        #     if val == SEPARATOR_HEX:
+        #         index += 1
+        #     else:
+        #         received[index]+=str(val)
+        #case where only ssid has arrived (no password because known network)
+        if len(received) == 1 :
+            received.append("")
         Log.log(f'from iphone received SSID/PW: {received}')
         ConfigData.reset_timeout()  # any data received from iphone resets the BLE Server timeout
         self.service.register_SSID(received)
@@ -506,58 +887,120 @@ class InfoWifiDescriptor(Descriptor):
         return value
 
 
+class BLEManager:
 
-def graceful_quit(signum,frame):
-    Log.log("stopping main loop on SIGTERM received")
-    sleep(0.5)
-    mainloop.quit()
+    def __init__(self):
+        self.cryptoManager = crypt.BTCryptoManager()
+        self.mainloop = GLib.MainLoop()
+        self.counter = 0
 
-def check_button():
-    #placeholder -  return true if button was pressed
-    return True
+    def quitBT(self):
+        if self.advert: self.advert.unregister()
+        if self.app: self.app.unregister()
+        self.mainloop.quit()
 
-def timeout_manager():
-    #Log.log(f'checking timeout {ConfigData.START}')
-    if ConfigData.check_timeout():
-        Log.log("BLE Server timeout - exiting...")
-        sleep(0.2)
-        mainloop.quit()
-        return False
-    else:
+    def graceful_quit(self,signum,frame):
+        Log.log("stopping main loop on SIGTERM received")
+        sleep(0.5)
+        self.quitBT()
+
+    def check_button(self):
+        #placeholder -  return true if button was pressed
         return True
+    
+    def timeout_manager(self):
+        #Log.log(f'checking timeout {ConfigData.START}')
+        # global justTesting
+        # if justTesting:
+        #     wifiset_service.testDbusAppUser()
+        #     justTesting = False
+        # this is for testing restart only
+        # if restart_count == 0:
+        #     self.counter += 1
+        #     if self.counter > 1 :
+        #         self.advert.register_ad_error_callback("Maximum")
+        #         return True
+
+        if ConfigData.check_timeout():
+            Log.log("BLE Server timeout - exiting...")
+            self.cryptoManager.pi_info.saveInfo()
+            sleep(1)
+            self.quitBT()
+            return False
+        else:
+            return True
+
+    
+
+    def start(self):
+        signal.signal(signal.SIGTERM, self.graceful_quit)
+        ConfigData.initialize()
+        Log.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
+        Log.log("** Version date: xxxx-xx-xx **\n")
+        Log.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
+        Log.log("starting BLE Server")
+        ConfigData.reset_timeout()
+        
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+
+        Blue.set_adapter()
+        Blue.bus.add_signal_receiver(Blue.properties_changed,
+                    dbus_interface = "org.freedesktop.DBus.Properties",
+                    signal_name = "PropertiesChanged",
+                    arg0 = "org.bluez.Device1",
+                    path_keyword = "path")
+                    
+        self.app = Application()
+        #added passing a reference to the session dbus so service can register the userapp dbus listener when needed
+        # justTesting = True
+        wifiset_service = WifiSetService(0,self.mainloop,self.cryptoManager)
+        self.app.add_service(wifiset_service)
+        self.app.register()
+        self.advert = Advertise(0,self)
+        print("registering")
+        self.advert.register()
+        # sleep(1)
+        # print("de-registering")
+        # self.advert.unregister()
+        # sleep(1)
+        # print("registering")
+        # self.advert.register()
+
+        try:
+            GLib.timeout_add(BLE_SERVER_GLIB_TIMEOUT, self.timeout_manager)
+            Log.log("starting main loop")
+            self.mainloop.run()
+        except KeyboardInterrupt:
+            Log.log("stopping main loop")
+            self.cryptoManager.pi_info.saveInfo()
+            sleep(1)
+            self.quitBT()
+
+NEED_RESTART = False
+restart_count = 0
+
+def btRestart():
+        cmd = "systemctl restart bluetooth"
+        Log.log("restarting bluetooth")
+        r = subprocess.run(cmd, shell=True,text=True, timeout = 10)
+        sleep(1)
+        cmd = "systemctl --no-pager status bluetooth"
+        Log.log("checking bluetooth")
+        s = subprocess.run(cmd, shell=True, text=True, timeout=10)
+        Log.log(s)
 
 
-signal.signal(signal.SIGTERM, graceful_quit)
-ConfigData.initialize()
-Log.log("** Starting BTwifiSet - version date: xxxx-xx-xx **\n")
-Log.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
 
-Log.log("starting BLE Server")
-ConfigData.reset_timeout()
-mainloop = GLib.MainLoop()
-dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+if __name__ == "__main__":
+    NEED_RESTART = True
+    while NEED_RESTART:
+        NEED_RESTART = False
+        blemgr = BLEManager()
+        blemgr.start()
+        Log.log(f"ble manager has exited with need restart = {NEED_RESTART}")
+        restart_count += 1
+        #allow only one restart of bluetooth (from advertisement error: maximum exceeded)
+        NEED_RESTART = NEED_RESTART and (restart_count < 2)
+        if NEED_RESTART: btRestart()
 
-Blue.set_adapter()
-Blue.bus.add_signal_receiver(Blue.properties_changed,
-            dbus_interface = "org.freedesktop.DBus.Properties",
-            signal_name = "PropertiesChanged",
-            arg0 = "org.bluez.Device1",
-            path_keyword = "path")
-            
-app = Application()
-app.add_service(WifiSetService(0,mainloop))
-app.register()
-
-Advertise(0).register()
-
-try:
-    GLib.timeout_add(BLE_SERVER_GLIB_TIMEOUT, timeout_manager)
-    Log.log("starting main loop")
-    mainloop.run()
-except KeyboardInterrupt:
-    Log.log("stopping main loop")
-    sleep(1)
-    mainloop.quit()
-
-
-
+    Log.log("btwifiset says: So long and thanks for all the fish")

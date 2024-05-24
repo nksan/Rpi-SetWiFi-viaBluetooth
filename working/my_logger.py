@@ -1,6 +1,6 @@
+
 import sys
 import syslog
-#import time
 from datetime import datetime
 
 class mLOG:
