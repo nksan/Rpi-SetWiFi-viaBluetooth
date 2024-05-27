@@ -1120,7 +1120,7 @@ class WifiManager:
         out = subprocess.run("nmcli", shell=True,capture_output=True,encoding='utf-8',text=True).stderr
         network_manager_is_running = (out == "")
         out += 'Network Manager is running' if network_manager_is_running else ''
-        Log.log(f"nmcli test: returns {network_manager_is_running} : {out}")
+        Log.log(f"test: Network Manager is running = {network_manager_is_running}")
         return network_manager_is_running
 
 

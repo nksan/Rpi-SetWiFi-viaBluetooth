@@ -9,12 +9,13 @@ import random
 import json
 from threading import Timer
 from my_logger import mLOG as Log
+import pathlib
 
-
+FILEDIR = f"{pathlib.Path(__file__).parent.resolve()}/"
 
 class PiInfo:
-    PWFILE = "crypto"
-    INFOFILE = "infopi.json"
+    PWFILE = FILEDIR+"crypto"
+    INFOFILE = FILEDIR+"infopi.json"
 
     """
     variables and storing needs:
@@ -42,6 +43,9 @@ class PiInfo:
                 self.locked = dict["locked"]
                 self.last_nonce = dict["last_nonce"]
             return True  
+        except FileNotFoundError:
+            Log.log("file {PiInfo.INFOFILE} not created yet - using default values")
+            return False
         except Exception as ex:
             Log.log(f"Error reading file {PiInfo.INFOFILE}: {ex}") 
             return False
@@ -62,7 +66,7 @@ class PiInfo:
             with open(PiInfo.PWFILE, 'r', encoding="utf-8") as f:
                 pw = f.readline().rstrip()
                 return pw if len(pw) > 0 else None     
-        except:
+        except Exception as ex:
             return None
 
 

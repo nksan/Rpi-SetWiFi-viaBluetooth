@@ -52,6 +52,14 @@ function getcountrycode() {
     done
 }
 
+function pkgexists() {
+    #
+    # $1 has apt package name to check
+    #
+    pkg=$1
+    [ "$($sudo apt-cache showpkg $pkg 2>/dev/null)" != "" ] && return 0 || return 1
+}
+
 function ispkginstalled() {
     #
     # $1 has package name
@@ -88,7 +96,8 @@ function isdbusok() {
 # Main code
 #
 [ $EUID -eq 0 ] && sudo="" || sudo="sudo"
-srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/version2"
+branch="version2"
+srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/$branch"
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
@@ -135,43 +144,43 @@ then
 	echo "> Add 'update=1' to $wpa"
 	$sudo sed -i "1 a update_config=1" $wpa
     fi
-else
-    if askyn "File $wpa not found; Create"
+    if ! $sudo grep -q "country=" $wpa > /dev/null 2>&1
     then
-	(cat <<EOF
+	echo "> Add 'country=$country' to $wpa"
+	$sudo sed -i "1 a country=$country" $wpa
+    fi
+else
+    echo "> Creating file $wpa"
+    (cat <<EOF
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 country=$country
 update_config=1
 EOF
-	) | $sudo bash -c "cat > $wpa"
-    else
-	echo "? wpa supplicant config file $wpa is required for btwifiset"
-	errexit "? Aborting installation"
-    fi
+    ) | $sudo bash -c "cat > $wpa"
 fi
 
 # V Assumes Python versions in the form of nn.nn.nn (which they all seem to be)
 pyver=$((python3 --version) | (read p version junk ; echo ${version%.*}))  # This gets, for example, 3.11
 pymajver=${pyver%.*}
 pycomponents="python${pymajver}-gi libdbus-glib-1-dev libpython${pyver}-dev"
+pkgexists python${pymajver}-cryptography && pycomponents="${pycomponents} python${pymajver}-cryptography"
 
-
-# If python3-dbus is available, install that. If not, install python3-pip and then we'll pip install dbus-python
+# If python${pymajver}-dbus is available, install that. If not, install python${pymajver}-pip and then we'll pip install dbus-python
 isdbusok && pycomponents="${pycomponents} python${pymajver}-dbus" || pycomponents="${pycomponents} python${pymajver}-pip"
 echo "> Install required Python components: $pycomponents"
 $sudo apt install $pycomponents  --yes
 sts=$?
 [ ! $sts ] && errexit "? Error returned from apt install ($sts)"
 
-# If python3-dbus is not available install dbus-python with pip
+# If python${pymajver}-dbus is not available install dbus-python with pip
 if ! isdbusok
 then
-    if ispkginstalled python3-dbus && false
+    if ispkginstalled python${pymajver}-dbus && false # && false so this doesn't get executed; doesn't seem to be needed
     then
-	echo "> Remove installed python3-dbus in favor of newer version from pip install"
-	$sudo apt remove python3-dbus --yes
+	echo "> Remove installed python${pymajver}-dbus in favor of newer version from pip install"
+	$sudo apt remove python${pymajver}-dbus --yes
     fi
-    echo "> pip install dbus-python since apt python3-dbus version is not new enough"
+    echo "> pip install dbus-python since apt python${pymajver}-dbus version is not new enough"
     [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
     $sudo rm -f $btwifidir/pip-stderr.txt
     (cat <<EOF
@@ -184,64 +193,19 @@ EOF
     [ ! $sts ] && errexit "? Error returned from 'pip install dbus-python' ($sts)"
 fi
 
-# Install btpasswd.py
-# echo "> Create $btwifidir/btpasswd.py"
-# 	(cat <<EOF
-# #!/usr/bin/python3
+# If python${pymajver}-cryptography not installed, pip install it
 
-# import argparse
-
-# class PW:
-#     PWFILE = "crypto"
-
-#     def __init__(self):
-#         self.password = self.getPassword()
-
-
-#     def getPassword(self):
-#         #if crypto file exists but password is empty string - return None as if file did not exist
-#         try:
-#             with open(PW.PWFILE, 'r', encoding="utf-8") as f:
-#                 pw = f.readline().rstrip()
-#                 return pw if len(pw) > 0 else None     
-#         except:
-#             return None
-    
-#     def savePassword(self,pw):
-#         if pw is not None:
-#             with open(PW.PWFILE,'w+',encoding="utf-8") as f:
-#                 f.write(pw)
-
-#     def userPassword(self):
-#         new_password = ""
-#         done_once = False
-#         while len(new_password) < 4:
-#             print("\nNote:password must be 4 characters min, leading and trailing blanks are removed.")
-#             if done_once: print("\npassword invalid! - please try again.")
-#             new_password = input("Please enter a password [X to quit]:").strip()
-#             if new_password.lower() == "x": 
-#                 print("password was not changed")
-#                 return
-#             done_once = True
-#         print(f"New password is: {new_password}")
-#         self.savePassword(new_password)
-
-
-# if __name__ == "__main__":
-#     pwc = PW()
-#     if pwc.password is None:
-#         print("Password is not set yet.")
-#         pwc.userPassword()
-#     else:
-#         print(f"current password is: {pwc.password}")
-#         answer = input("Do you want to change it? [y/n]")
-#         if answer and (answer[0].lower() == 'y'):
-#              pwc.userPassword()
-#         else :
-#              print("password was not changed")
-# EOF
-# 	) | $sudo bash -c "cat > $btwifidir/btpasswd.py"
-# $sudo chmod 755 $btwifidir/btpasswd.py
+if ! ispkginstalled python${pymajver}-cryptography
+then
+    if [ "$(type -p pip)" -= "" ]
+    then
+	echo "> Install pip so we can install cryptography"
+	$sudo apt install python${pymajver}-pip
+    fi
+    [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
+    echo "> Install cryptography with pip"
+    $sudo pip install cryptography $bsp 2>>$btwifidir/pip-stderr.txt
+fi
 
 # Modify bluetooth service. Copy it to /etc/systemd/system, which will be used before the one in /lib/systemd/system
 # Leaving the one in /lib/systemd/system as delivered. Good practice!
@@ -291,8 +255,17 @@ fi
 #
 # Enable services to start on system boot
 #
-#$sudo systemctl enable hciuart btwifiset
+echo "Waiting for services to start..."
+$sudo systemctl daemon-reload
 $sudo systemctl enable btwifiset
+$sudo systemctl restart bluetooth
+sleep 3
+$sudo systemctl start btwifiset
+echo $"
+btwifiset is installed and should be acessible with the BTBerryWiFi app.
+If not, reboot the system (this ensures btwifiset service starts correctly).
+"
+exit
 
 echo ""
 echo "> The system must be restarted before btwifiset will work"
@@ -302,9 +275,3 @@ then
     $sudo reboot
 fi
 exit
-#This sometimes fails so disabled for now
-#echo "Waiting for services to start..."
-#$sudo systemctl daemon-reload
-#$sudo systemctl start hciuart
-#sleep 5
-#$sudo systemctl start btwifiset

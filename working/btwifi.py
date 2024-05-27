@@ -595,28 +595,30 @@ class WifiSetService(Service):
                 self.mgr.wifi_connect(True)
             elif val[1] == 'DISCONN':
                 self.mgr.disconnect()
+            elif val[1] == 'AP2s':
+                #version2 sends AP2s and gets a json object back:
+                #note: since version never reads APs one by one, self.AP_list is always empty
+                returned_list = self.mgr.get_list() #go get the list
+                temp_AP_list = []
+                for ap in returned_list:
+                    temp_AP_list.append(ap.msg())
+                self.notifications.setNotification('READY2')
+                Log.log(f'READY to send AP List as Json object\n AP List: {temp_AP_list}')
+                self.all_APs_dict = {"allAps":temp_AP_list}
+                self.notifications.setJsonNotification(self.all_APs_dict)
             elif val[1] == 'APs':
-                #Log.log('getting list')
+                #version 1 of the phone app sends this code: APs
+                #after receiving notification READY - it reads the list one by one - with chracteristic read.
                 returned_list = self.mgr.get_list() #go get the list
                 self.AP_list = []
                 for ap in returned_list:
                     self.AP_list.append(ap.msg())
-                """
-                to maintain compatibility with version 1 of the app, 
-                return READY on notifications then app reads one AP per rad on wifi characteristic call.
-                but version 2 of the app does not activiely read the AP.
-                it waits for the next Notification (after Ready) - which is the entire list of AP
-                sent a all+AP_dict json object (could be multiple chunks)
-                (note: in the original app this second notification will be ignored.)
-                """
-                self.all_APs_dict = {"allAps":self.AP_list}
                 self.notifications.setNotification('READY')
                 Log.log(f'READY: AP List for ios: {self.AP_list}')
-                self.notifications.setJsonNotification(self.all_APs_dict)
                 #this is needed for compatibility with verison 1 of the iphone app
-                ap_connected = self.mgr.wpa.connected_AP
-                if ap_connected != "0000":
-                    self.notifications.setNotification(ap_connected)
+                # ap_connected = self.mgr.wpa.connected_AP
+                # if ap_connected != "0000":
+                #     self.notifications.setNotification(ap_connected)
                 
             
             #*********** LOCK Management:
@@ -890,6 +892,8 @@ class InfoWifiDescriptor(Descriptor):
 class BLEManager:
 
     def __init__(self):
+        signal.signal(signal.SIGTERM, self.graceful_quit)
+        ConfigData.initialize()
         self.cryptoManager = crypt.BTCryptoManager()
         self.mainloop = GLib.MainLoop()
         self.counter = 0
@@ -933,8 +937,6 @@ class BLEManager:
     
 
     def start(self):
-        signal.signal(signal.SIGTERM, self.graceful_quit)
-        ConfigData.initialize()
         Log.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
         Log.log("** Version date: xxxx-xx-xx **\n")
         Log.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
