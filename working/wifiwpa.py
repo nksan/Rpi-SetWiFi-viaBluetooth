@@ -682,7 +682,7 @@ class NetworkManager:
                      # Note it is not necessary to modiy the in_supplicant and connected property of the AP since it will be regenerated
                     #       when ios calls for the list again.  If it is hidden, it will be scanned because the hidden "word" was set on the network.
             #set the connected network to this ssid -> also sets the connected_AP and gets the signal strength:        
-            self.mgr.wpa.connected_network = self.mgr.wpa.wpa_supplicant_ssids[network.ssid] # make it the connected network
+            self.mgr.wpa.connected_network = use_network # make it the connected network
         return connection_attempt
 
     def create_network(self,ssid,pw,hidden = False):

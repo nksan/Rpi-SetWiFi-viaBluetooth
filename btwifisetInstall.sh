@@ -32,7 +32,7 @@ function getcountrycode() {
     local ctry=""
     if [ -f $wpa ]
     then
-	if $sudo grep -q "country=" $wpa > /dev/null 2>&1
+	if $sudo grep -q "country=" $wpa >/dev/null 2>&1
 	then
 	    ctry=$($sudo grep "country=" $wpa | (IFS="=" ; read a ctry ; echo $ctry))
 	fi
@@ -64,7 +64,7 @@ function ispkginstalled() {
     #
     # $1 has package name
     #
-    iver=$($sudo apt-cache policy $1 | grep Installed: 2> /dev/null)
+    iver=$($sudo apt-cache policy $1 | grep Installed: 2>/dev/null)
     if [ "$iver" == "" ]
     then
         return 1
@@ -114,7 +114,7 @@ then
 	(cat <<EOF
 $btpwd
 EOF
-	) | $sudo bash -c "cat > $btwifidir/crypto"
+	) | $sudo bash -c "cat >$btwifidir/crypto"
     
 fi
 
@@ -139,12 +139,12 @@ done
 # Create wpa_supplicant.conf always even if not needed
 if [ -f $wpa ]
 then
-    if ! $sudo grep -q "update_config=1" $wpa > /dev/null 2>&1
+    if ! $sudo grep -q "update_config=1" $wpa >/dev/null 2>&1
     then
 	echo "> Add 'update=1' to $wpa"
 	$sudo sed -i "1 a update_config=1" $wpa
     fi
-    if ! $sudo grep -q "country=" $wpa > /dev/null 2>&1
+    if ! $sudo grep -q "country=" $wpa >/dev/null 2>&1
     then
 	echo "> Add 'country=$country' to $wpa"
 	$sudo sed -i "1 a country=$country" $wpa
@@ -156,21 +156,37 @@ ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 country=$country
 update_config=1
 EOF
-    ) | $sudo bash -c "cat > $wpa"
+    ) | $sudo bash -c "cat >$wpa"
 fi
 
 # V Assumes Python versions in the form of nn.nn.nn (which they all seem to be)
 pyver=$((python3 --version) | (read p version junk ; echo ${version%.*}))  # This gets, for example, 3.11
 pymajver=${pyver%.*}
-pycomponents="python${pymajver}-gi libdbus-glib-1-dev libpython${pyver}-dev"
-pkgexists python${pymajver}-cryptography && pycomponents="${pycomponents} python${pymajver}-cryptography"
+pycomponents=""
+for pkg in python${pymajver}-gi libdbus-glib-1-dev libpython${pyver}-dev
+do
+    ! ispkginstalled $pkg && pycomponents="${pycomponents}${pkg} "
+done
+if pkgexists python${pymajver}-cryptography
+then
+    ! ispkginstalled $pkg && pycomponents="${pycomponents}python${pymajver}-cryptography "
+fi
 
 # If python${pymajver}-dbus is available, install that. If not, install python${pymajver}-pip and then we'll pip install dbus-python
-isdbusok && pycomponents="${pycomponents} python${pymajver}-dbus" || pycomponents="${pycomponents} python${pymajver}-pip"
-echo "> Install required Python components: $pycomponents"
-$sudo apt install $pycomponents  --yes
-sts=$?
-[ ! $sts ] && errexit "? Error returned from apt install ($sts)"
+if isdbusok
+then
+    ! ispkginstalled python${pymajver}-dbus && pycomponents="${pycomponents}python${pymajver}-dbus "
+else
+    ! ispkginstalled python${pymajver}-pip && pycomponents="${pycomponents}python${pymajver}-pip "
+fi
+
+if [ "$pycomponents" != "" ]
+then
+    echo "> Install required Python components: $pycomponents"
+    $sudo apt install $pycomponents  --yes
+    sts=$?
+    [ ! $sts ] && errexit "? Error returned from apt install ($sts)"
+fi
 
 # If python${pymajver}-dbus is not available install dbus-python with pip
 if ! isdbusok
@@ -187,7 +203,7 @@ then
 # This output is only interesting and useful if the dbus-python module fails to install
 
 EOF
-    ) | $sudo bash -c "cat > $btwifidir/pip-stderr.txt"
+    ) | $sudo bash -c "cat >$btwifidir/pip-stderr.txt"
     $sudo pip install $bsp dbus-python --force-reinstall 2>>$btwifidir/pip-stderr.txt
     sts=$?
     [ ! $sts ] && errexit "? Error returned from 'pip install dbus-python' ($sts)"
@@ -197,7 +213,7 @@ fi
 
 if ! ispkginstalled python${pymajver}-cryptography
 then
-    if [ "$(type -p pip)" -= "" ]
+    if [ "$(type -p pip)" == "" ]
     then
 	echo "> Install pip so we can install cryptography"
 	$sudo apt install python${pymajver}-pip
@@ -238,7 +254,7 @@ ExecStart=/bin/python3 $btwifidir/btwifiset.py --syslog
 [Install]
 WantedBy=multi-user.target
 EOF
-) | $sudo bash -c "cat > /etc/systemd/system/btwifiset.service"
+) | $sudo bash -c "cat >/etc/systemd/system/btwifiset.service"
 #
 # Link bluetooth.target.wants and dbus-org.bluez.service to the copy of bluetooth.service we made in /etc/systemd/system
 #

@@ -899,8 +899,11 @@ class BLEManager:
         self.counter = 0
 
     def quitBT(self):
-        if self.advert: self.advert.unregister()
-        if self.app: self.app.unregister()
+        try:
+            if self.advert: self.advert.unregister()
+            if self.app: self.app.unregister()
+        except Exception as ex:
+            Log.log(ex)
         self.mainloop.quit()
 
     def graceful_quit(self,signum,frame):
