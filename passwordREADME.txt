@@ -13,7 +13,7 @@ To VIEW or CHANGE the password - Open a Terminal (or SSH into it):
      -> enter at prompt $: cd /usr/bin/btwifiset
 
 2) Launch the self-executing python file: btpassword.py with sudo:
-     -> enter at prompt $: ./sudo btpassword.py
+     -> enter at prompt $: sudo ./btpassword.py
 
 3) This will display the current password.
     To change password: Follow prompts on the screen.
@@ -30,7 +30,7 @@ Notes:
         -  If you own the Raspbery Pi or have user/password priviledge access to it,
            then it should be simple for you to change the bluetooth encryption password.
         -  Therefore, any user with sudo proviledge on this RPI can do: 
-              -> enter at prompt $:  cat crypto,
+              -> enter at prompt $:  sudo cat crypto,
            which prints the password, so it  can be 
            entered into the iphone app when prompted.
 
