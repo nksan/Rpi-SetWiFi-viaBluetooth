@@ -96,7 +96,8 @@ function isdbusok() {
 # Main code
 #
 [ $EUID -eq 0 ] && sudo="" || sudo="sudo"
-branch="version2"
+#change this to branch name where we want to pull files from
+branch="main"
 srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/$branch"
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
@@ -123,7 +124,7 @@ country=""
 getcountrycode
 
 echo "> Download btwifiset to $btwifidir"
-for f in btwifiset.py btpassword.py
+for f in btwifiset.py btpassword.py passwordREADME.txt
 do
     #Using curl: $sudo curl --fail --silent --show-error -L $srcurl/$f -o $btwifidir/$f
     $sudo wget $srcurl/$f --output-document=$btwifidir/$f
