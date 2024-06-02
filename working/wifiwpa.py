@@ -156,21 +156,30 @@ class WifiUtil:
         if oth is None:
             return None
         else:
-            return {"other":WifiUtil.otherInfo()}
+            try :
+                return {"other":str(WifiUtil.otherInfo())}
+            except:
+                return None
 
     #To send other information to the iphone - modify the function below as needed:
     @staticmethod
     def otherInfo():
-        #remove this line:
-        out = None
-        # tsadd code that generate a string representing the info you want
-        
-        #if the info can be obtained from a bash call uncoment the below
-        #out = subprocess.run("enter bash command here", 
-        #        shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        #1. remove this line:
+        info = None
 
-        #ultimately you must return a string (not an object!)
-        return out
+        # 2. add code that generate a string representing the info you want
+        #IMPORTANT: you must return a string (not an object!)
+        """
+        if the info can be obtained from a bash call - you can use this:
+        
+        info = subprocess.run("enter bash command here", 
+                shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+
+        If the returned data from the command requires user input for paging,
+            ensure that a no-pager option of some type is used - other wise the system will hang.
+        """
+        
+        return info
     
 
 

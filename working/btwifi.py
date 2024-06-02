@@ -119,7 +119,7 @@ class Notifications:
         else:
             return list(to_send)
 
-    def setJsonNotification(self,msgObject):
+    def setJsonNotification(self,msgObject,never_encypt = False):
         #msgObject must be an array 
         #typically contains dictionaries - but could contain other json encodable objects
         #The total length of the json string can exceed 182 bytes in utf8 encoding
@@ -131,8 +131,14 @@ class Notifications:
             chunk_to_send = SEPARATOR + chunked_json_str[i]
             if i+1 < len(chunked_json_str):
                 chunk_to_send += SEPARATOR
-            encrypted = self.cryptomgr.encrypt(chunk_to_send)
-            self.notifications.append(encrypted)
+            try:
+                if never_encypt:
+                    encrypted = chunk_to_send.encode('utf8')
+                else:
+                    encrypted = self.cryptomgr.encrypt(chunk_to_send)
+                self.notifications.append(encrypted)
+            except Exception as ex:
+                Log.log(f"Error encrypting json notification: {ex}")
 
 
 def dbus_to_python(data):
@@ -643,11 +649,11 @@ class WifiSetService(Service):
                 ap = wifi.WifiUtil.scan_for_channel()
                 self.notifications.setJsonNotification(ap)
             elif val[1] == "infoOther": 
-                oth = wifi.WifiUtil.get_other_info()
-                if oth is not None:
+                othDict = wifi.WifiUtil.get_other_info()
+                if othDict is not None:
                     try:
-                        strDict = {"other":str(oth["other"])}
-                        self.notifications.setJsonNotification(strDict)
+                        #set never_encrypt so it is sent in clear text regardless of crypto status
+                        self.notifications.setJsonNotification(othDict,True)
                     except:
                         pass
             elif val[1] == "infoAll": 
