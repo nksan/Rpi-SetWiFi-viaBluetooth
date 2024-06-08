@@ -19,7 +19,7 @@ function askdefault () {
     # $1=prompt, $2=return variable $3=default-for-prompt-plus-default
     # Defines the variable named in $2 with the user's response as its value
     local pmpt=$1 dfl="$3" tmp=""
-    echo -n "$pmpt [default to use: $dfl]: " ; read tmp < /dev/tty
+    echo -n "$pmpt [default to be used: $dfl]: " ; read tmp < /dev/tty
     [ "$tmp" == "" ] && tmp="$dfl"
     eval "${2}=\"${tmp}\""     # Defines a variable with the return value
 }
@@ -43,7 +43,7 @@ function getcountrycode() {
 	askdefault "Enter your country code" country "$ctry"
 	country=${country:0:2}
 	country=${country^^}
-	if ! $sudo grep -q ^$country /usr/share/zoneinfo/iso3166.tab 
+	if ! grep -q ^$country /usr/share/zoneinfo/iso3166.tab 
 	then
 	    echo "? '$country' is not a recognized country in /usr/share/zoneinfo/iso3166.tab"
 	else
@@ -124,7 +124,7 @@ function osprecheck() {
 	echo $"
 ? This buster system has a version of the python module 'cryptography' installed via $insmethod
 that is too old. Replacing it could break apps on your system, so exiting for you to resolve.
-See README section: Installation Issues for details.
+See http://some/url for complete details.
 "
 	exit 1
     }
@@ -136,7 +136,7 @@ See README section: Installation Issues for details.
 	    echo "> This OS version is 'buster'; Checking for already-installed cryptography module"
 	    if [ "$(type -t pip3)" != "" ]
 	    then
-		cryptover="$(pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
+		cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
 		[[ "$cryptover" != "" ]] && [[ ${cryptover:0:1} -lt 3 ]] && cryptofail pip
 	    fi
 	    installedcryptok || cryptofail apt
@@ -168,7 +168,7 @@ $sudo mkdir -p $btwifidir
 btpwd=$(hostname)
 if [[ ! -f $btwifidir/crypto ]] || [[ ! -s $btwifidir/crypto ]]
 then
-    rm -f $btwifidir/crypto
+    $sudo rm -f $btwifidir/crypto
     askdefault "Bluetooth password (encryption key)" btpwd "$btpwd"
 	(cat <<EOF
 $btpwd
