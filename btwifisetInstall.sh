@@ -19,7 +19,7 @@ function askdefault () {
     # $1=prompt, $2=return variable $3=default-for-prompt-plus-default
     # Defines the variable named in $2 with the user's response as its value
     local pmpt=$1 dfl="$3" tmp=""
-    echo -n "$pmpt [$dfl]: " ; read tmp < /dev/tty
+    echo -n "$pmpt [default to use: $dfl]: " ; read tmp < /dev/tty
     [ "$tmp" == "" ] && tmp="$dfl"
     eval "${2}=\"${tmp}\""     # Defines a variable with the return value
 }
@@ -92,6 +92,63 @@ function isdbusok() {
     return 1
 }
 
+function installedcryptok() {
+    #
+    # Check if python3-cryptography is installed and new enough
+    # True if yes, False if not
+    #
+    local line
+    ispkginstalled python${pymajver}-cryptography || return 0
+    while read line
+    do
+        if [[ "$line" =~ "Installed:" ]] && [[ ! "$line" =~ "(none)" ]] || [[ "$line" =~ "Candidate:" ]]
+        then
+            ver="${line#*: }"
+	    [[ ${ver:0:1} -ge 3 ]] && return 0 || return 1
+        fi
+    done < <($sudo apt policy python3-cryptography 2>/dev/null)
+    return 1
+}
+
+function getosrelease() {
+    echo "$(grep ^VERSION_CODENAME= /etc/os-release | (IFS="=" read v id ; id=${id%\"} ; echo ${id#\"}))"
+    return
+}
+
+function osprecheck() {
+    #
+    # Get os version from /etc/os-release and case on it
+    #
+    function cryptofail() {
+	local insmethod="$1"
+	echo $"
+? This buster system has a version of the python module 'cryptography' installed via $insmethod
+that is too old. Replacing it could break apps on your system, so exiting for you to resolve.
+See http://some/url for complete details.
+"
+	exit 1
+    }
+    
+    local relcode cryptover aok=1
+    relcode="$(getosrelease)"
+    case "${relcode,,}" in
+	buster)
+	    echo "> This OS version is 'buster'; Checking for already-installed cryptography module"
+	    if [ "$(type -t pip3)" != "" ]
+	    then
+		cryptover="$(pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
+		[[ "$cryptover" != "" ]] && [[ ${cryptover:0:1} -lt 3 ]] && cryptofail pip
+	    fi
+	    installedcryptok || cryptofail apt
+	    echo "> Proceeding with btwifiset install"
+	    echo ""
+	    ;;
+	*)
+	    /bin/true
+	    ;;
+    esac
+}
+
 #
 # Main code
 #
@@ -103,6 +160,7 @@ echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
 btwifidir="/usr/local/btwifiset"
+osprecheck
 askdefault "btwifiset install directory" btwifidir "/usr/local/btwifiset"
 $sudo mkdir -p $btwifidir
 
@@ -134,7 +192,7 @@ do
 	echo "? Unable to download $f from $srcurl (Error $wsts)"
 	errexit "? btwifiset cannot be installed"
     fi
-    $sudo chmod 755 $btwifidir/$f
+    [[ "$f" =~ ".txt" ]] && $sudo chmod 644 $btwifidir/$f || $sudo chmod 755 $btwifidir/$f
 done
 
 # Create wpa_supplicant.conf always even if not needed
@@ -168,7 +226,8 @@ for pkg in python${pymajver}-gi libdbus-glib-1-dev libpython${pyver}-dev
 do
     ! ispkginstalled $pkg && pycomponents="${pycomponents}${pkg} "
 done
-if pkgexists python${pymajver}-cryptography
+
+if pkgexists python${pymajver}-cryptography && [[ "$(getosrelease)" != "buster" ]]
 then
     ! ispkginstalled $pkg && pycomponents="${pycomponents}python${pymajver}-cryptography "
 fi
@@ -192,12 +251,12 @@ fi
 # If python${pymajver}-dbus is not available install dbus-python with pip
 if ! isdbusok
 then
-    if ispkginstalled python${pymajver}-dbus && false # && false so this doesn't get executed; doesn't seem to be needed
-    then
-	echo "> Remove installed python${pymajver}-dbus in favor of newer version from pip install"
-	$sudo apt remove python${pymajver}-dbus --yes
-    fi
-    echo "> pip install dbus-python since apt python${pymajver}-dbus version is not new enough"
+    #if ispkginstalled python${pymajver}-dbus && false # && false so this doesn't get executed; doesn't seem to be needed
+    #then
+	#echo "> Remove installed python${pymajver}-dbus in favor of newer version from pip install"
+	#$sudo apt remove python${pymajver}-dbus --yes
+    #fi
+    echo "> pip3 install dbus-python since apt python${pymajver}-dbus version is not new enough"
     [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
     $sudo rm -f $btwifidir/pip-stderr.txt
     (cat <<EOF
@@ -205,7 +264,7 @@ then
 
 EOF
     ) | $sudo bash -c "cat >$btwifidir/pip-stderr.txt"
-    $sudo pip install $bsp dbus-python --force-reinstall 2>>$btwifidir/pip-stderr.txt
+    $sudo pip3 install $bsp dbus-python --force-reinstall 2>>$btwifidir/pip-stderr.txt
     sts=$?
     [ ! $sts ] && errexit "? Error returned from 'pip install dbus-python' ($sts)"
 fi
@@ -216,12 +275,12 @@ if ! ispkginstalled python${pymajver}-cryptography
 then
     if [ "$(type -p pip)" == "" ]
     then
-	echo "> Install pip so we can install cryptography"
+	echo "> Install pip3 so we can install cryptography"
 	$sudo apt install python${pymajver}-pip
     fi
     [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
     echo "> Install cryptography with pip"
-    $sudo pip install cryptography $bsp 2>>$btwifidir/pip-stderr.txt
+    $sudo pip3 install cryptography $bsp 2>>$btwifidir/pip-stderr.txt
 fi
 
 # Modify bluetooth service. Copy it to /etc/systemd/system, which will be used before the one in /lib/systemd/system
@@ -250,7 +309,7 @@ After=bluetooth.target
 
 [Service]
 Type=simple
-ExecStart=/bin/python3 $btwifidir/btwifiset.py --syslog
+ExecStart=/usr/bin/python3 $btwifidir/btwifiset.py --syslog
 
 [Install]
 WantedBy=multi-user.target
