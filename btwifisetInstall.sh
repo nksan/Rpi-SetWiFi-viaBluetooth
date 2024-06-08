@@ -124,7 +124,7 @@ function osprecheck() {
 	echo $"
 ? This buster system has a version of the python module 'cryptography' installed via $insmethod
 that is too old. Replacing it could break apps on your system, so exiting for you to resolve.
-See http://some/url for complete details.
+See README section: Installation Issues for details.
 "
 	exit 1
     }

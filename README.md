@@ -61,6 +61,15 @@ will customize the IMG to have btwifiset installed and configured for the UK wit
 
 When you burn the customized IMG to an SSD/SD Card, you'll specify the hostname. After the system boots and finishes all First Boot customization, the system will reboot once, and will be fully operational, configured exactly as you want, and in this case, with btwifiset fully operational.
 
+## Installation Issues:
+
+### Cryptography too old
+The install script has detected that you are running a legacy version of the Raspberry Pi OS ("Buster" - version 10) which already has the cryptography modile installed.  However this version is old (version 2.x or less) - and will not work with the current Python Code on the Raspberry Pi.
+
+It was not possible for the install script to automatically update the cryptography module for you, since we might break some other program you are running.   
+
+The blog has details on how to install cryptography on your system if the insatller exited.
+>You will need to perform the installation yourself, and then rerun the install using the curl command (see installation section above) so that the rest is installed correctly.
 
 ## What's new in version 2:
 

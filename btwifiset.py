@@ -137,7 +137,10 @@ class WifiUtil:
     
     @staticmethod
     def freq_to_channel(freq_str):
-     freq = int(freq_str)
+     try:
+        freq = int(freq_str)
+     except:
+         return 0
      if (freq == 2484): return 14
      #this returns 2.4GHZ channels
      if (freq < 2484):
@@ -150,11 +153,15 @@ class WifiUtil:
         #each ssid is dictionary with keys: frequency,signalStrength,channel,ssid
         #note: signalStrength is in dbm (less negative is stronger)
         found_ssids = []
-        out = subprocess.run("wpa_cli -i wlan0 scan", 
-                            shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        result = subprocess.run("wpa_cli -i wlan0 scan", 
+                            shell=True,capture_output=True,encoding='utf-8',text=True)
+        if result.stderr: mLOG.log(f"scan error: {result.stderr}")
         time.sleep(1)
-        out = subprocess.run("wpa_cli -i wlan0 scan_results", 
-                            shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        result = subprocess.run("wpa_cli -i wlan0 scan_results", 
+                            shell=True,capture_output=True,encoding='utf-8',text=True)
+        if result.stderr: mLOG.log(f"scan error results: {result.stderr}")
+        out = result.stdout
+        mLOG.log(f"scan results:{out}")
         #this regex gtes frequency , signalstrength, ssid name
         ssids = re.findall(r"[^\s]+\s+(\d+)\s+(-?\d+)\s+[^\s]+\t+(.+)", out,re.M) 
         try:
@@ -168,22 +175,29 @@ class WifiUtil:
     @staticmethod
     def get_ip_address():
         #returns dictionary 
-        out = subprocess.run("ip addr show wlan0", 
-                                shell=True,capture_output=True,encoding='utf-8',text=True).stdout
-        #inet 192.168.1.24/24 brd 192.168.1.255 scope global dynamic noprefixroute wlan0
-        #inet6 2605:59c8:228a:a10::c2c/128 scope global dynamic noprefixroute
-        #inet6 fdf2:f5ea:23fc:10::c2c/128 scope global noprefixroute 
-        #+\s+([0-9.]+
-        inet = re.findall(r"^\s+inet\s+([\d+.]+)", out,re.M)  
-        inet6dynamic = re.findall(r"^\s+inet6+\s+([a-zA-Z0-9:]+).+?(?=global\s+?dynamic\s+?noprefixroute)", out,re.M)
-        inet6 = re.findall(r"^\s+inet6+\s+([a-zA-Z0-9:]+).+?(?=global\s+?noprefixroute)", out,re.M)
-        try:
-            if inet6:
-                return({"ip4":inet[0],"ip6":inet6[0]})
-            else:
-                return({"ip4":inet[0],"ip6":inet6dynamic[0]})
-        except:
-            return({"ip4":"not connected","ip6":"not connected"})
+        result = subprocess.run("ip addr show wlan0", 
+                                shell=True,capture_output=True,encoding='utf-8',text=True)
+        out = result.stdout
+        err = result.stderr
+        if err: mLOG.log(f"ip error: {err}")
+        if "not found" in err:
+            return {"ip4":"Error - linux command: ip (not installed on your system)\nto install - run in terminal: apt install iproute2","ip6":""}
+        elif err:
+            return {"ip4":f"Error:{err}","ip6":""}
+        else:
+            ip4 = re.findall(r"^\s+inet\s+([\d+.]+)", out,re.M)  
+            ip6 = re.findall(r"^\s+inet6+\s+([a-zA-Z0-9:]+.+)", out,re.M)
+            ip4_msg = ""
+            for ip in ip4:
+                ip4_msg += ip + "\n"
+            ip4_msg = ip4_msg[:-1]
+            ip6_msg = ""
+            for ip in ip6:
+                ip6_msg += "\n" + ip 
+            if not ip4_msg: ip4_msg = "not connected or available"
+            if not ip6_msg: ip6_msg = "not connected or available"
+            return {"ip4":ip4_msg,"ip6":ip6_msg}
+
 
     @staticmethod
     def get_mac():
@@ -207,8 +221,10 @@ class WifiUtil:
         Devices:
             hci0	B4:27:EC:70:B5:50
             """
-        out = subprocess.run("hcitool dev", 
-                            shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        result = subprocess.run("hcitool dev", 
+                            shell=True,capture_output=True,encoding='utf-8',text=True)
+        out = result.stdout
+        if result.stderr: mLOG.log(f"bluetooth cli error:{result.stderr}")
         btdevs = re.findall(r"(\w+)\s+([0-9A-Za-z:]+)", out,re.M)
         for btdev in btdevs:
             try:
@@ -2730,7 +2746,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: June 02 2024 **\n")
+        mLOG.log("** Version date: June 08 2024 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()
