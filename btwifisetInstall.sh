@@ -134,7 +134,7 @@ function pipcryptoversionok() {
     done < <($sudo apt policy python3-cryptography 2>/dev/null)
     #output thid if either version is GE 3 or crypto is not installed                                                                                                     
     echo "cryptography version check: OK"
-
+}
 
 function pipcryptoexists() {
     #already know that if it exosts - crypto is OK
