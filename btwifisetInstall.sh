@@ -92,62 +92,53 @@ function isdbusok() {
     return 1
 }
 
-function installedcryptok() {
-    #
-    # Check if python3-cryptography is installed and new enough
-    # True if yes, False if not
-    #
-    local line
-    ispkginstalled python${pymajver}-cryptography || return 0
+
+
+function pipcryptoversionok() {
+
+    function cryptofail() {
+        local insmethod="$1"
+        echo $"
+    ? This system has a version of the python module 'cryptography' installed via $insmethod
+    that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.
+    See README - intallation issues for solution details.
+    "
+        exit 1
+    }
+
+    local cryptover line
+    if [ "$(sudo which pip3)" != "" ]
+        then
+            cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
+            [[ "$cryptover" != "" ]] && [[ ${cryptover:0:1} -lt 3 ]] && cryptofail pip
+    fi
+
+    ispkginstalled python3-cryptography || return 0
     while read line
     do
         if [[ "$line" =~ "Installed:" ]] && [[ ! "$line" =~ "(none)" ]] || [[ "$line" =~ "Candidate:" ]]
-        then
-            ver="${line#*: }"
-	    [[ ${ver:0:1} -ge 3 ]] && return 0 || return 1
+            then
+                ver="${line#*: }"
+                [[ ${ver:0:1} -ge 3 ]] || cryptofail apt
         fi
     done < <($sudo apt policy python3-cryptography 2>/dev/null)
-    return 1
+    #output thid if either version is GE 3 or crypto is not installed
+    echo "cryptography version check: OK"
+
 }
 
-function getosrelease() {
-    echo "$(grep ^VERSION_CODENAME= /etc/os-release | (IFS="=" read v id ; id=${id%\"} ; echo ${id#\"}))"
-    return
+function pipcryptoexists() {
+    #already know that if it exosts - crypto is OK
+    if [ "$(sudo which pip3)" != "" ] 
+        then 
+            if [ "$($sudo pip3 list 2>/dev/null | grep cryptography)" != "" ]
+            then 
+                return 0
+            fi
+    fi
+     return 1
 }
 
-function osprecheck() {
-    #
-    # Get os version from /etc/os-release and case on it
-    #
-    function cryptofail() {
-	local insmethod="$1"
-	echo $"
-? This buster system has a version of the python module 'cryptography' installed via $insmethod
-that is too old. Replacing it could break apps on your system, so exiting for you to resolve.
-See http://some/url for complete details.
-"
-	exit 1
-    }
-    
-    local relcode cryptover aok=1
-    relcode="$(getosrelease)"
-    case "${relcode,,}" in
-	buster)
-	    echo "> This OS version is 'buster'; Checking for already-installed cryptography module"
-	    if [ "$(type -t pip3)" != "" ]
-	    then
-		cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
-		[[ "$cryptover" != "" ]] && [[ ${cryptover:0:1} -lt 3 ]] && cryptofail pip
-	    fi
-	    installedcryptok || cryptofail apt
-	    echo "> Proceeding with btwifiset install"
-	    echo ""
-	    ;;
-	*)
-	    /bin/true
-	    ;;
-    esac
-}
 
 #
 # Main code
@@ -160,7 +151,9 @@ echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
 btwifidir="/usr/local/btwifiset"
-osprecheck
+# check if crypto is installed - exit with warning if too old
+pipcryptoversionok
+
 askdefault "btwifiset install directory" btwifidir "/usr/local/btwifiset"
 $sudo mkdir -p $btwifidir
 
@@ -227,7 +220,8 @@ do
     ! ispkginstalled $pkg && pycomponents="${pycomponents}${pkg} "
 done
 
-if pkgexists python${pymajver}-cryptography && [[ "$(getosrelease)" != "buster" ]]
+# note at this point installing crypto with apt won;t hurt - even if it already installed with pip.
+if pkgexists python${pymajver}-cryptography 
 then
     ! ispkginstalled $pkg && pycomponents="${pycomponents}python${pymajver}-cryptography "
 fi
@@ -269,9 +263,9 @@ EOF
     [ ! $sts ] && errexit "? Error returned from 'pip install dbus-python' ($sts)"
 fi
 
-# If python${pymajver}-cryptography not installed, pip install it
-
-if ! ispkginstalled python${pymajver}-cryptography
+# already know that if it exists - crypto version is OK - just checks if it exists at all - install if not
+# If python${pymajver}-cryptography not installed (via apt above), pip install it
+if ! pipcryptoexists && ! ispkginstalled python3-cryptography
 then
     if [ "$(type -p pip)" == "" ]
     then
