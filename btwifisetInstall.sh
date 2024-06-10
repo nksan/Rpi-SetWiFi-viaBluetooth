@@ -92,16 +92,14 @@ function isdbusok() {
     return 1
 }
 
-
-
 function pipcryptoversionok() {
 
     function cryptofail() {
         local insmethod="$1"
-        echo $"                                                                                                                                                           
-    ? This system has a version of the python module 'cryptography' installed via $insmethod                                                                              
-    that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.                                                                     
-    See README - intallation issues for solution details.                                                                                                                 
+        echo $"                                                                                                                                                                                      
+    ? This system has a version of the python module 'cryptography' installed via $insmethod                                                                                                         
+    that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.                                                                                                
+    See README - intallation issues for solution details.                                                                                                                                            
     "
         exit 1
     }
@@ -110,10 +108,9 @@ function pipcryptoversionok() {
     if [ "$(sudo which pip3)" != "" ]
     then
         cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
-        echo "Cryptover: " $cryptover
         if [[ "$cryptover" == "" ]]
         then
-            echo "pip cryptography not installed"
+            echo "info - pip cryptography not installed"
         elif [[ ${cryptover:0:1} -lt 3 ]]
         then
             cryptofail pip
@@ -132,8 +129,9 @@ function pipcryptoversionok() {
                 [[ ${ver:0:1} -ge 3 ]] || cryptofail apt
         fi
     done < <($sudo apt policy python3-cryptography 2>/dev/null)
-    #output thid if either version is GE 3 or crypto is not installed                                                                                                     
+    #output thid if either version is GE 3 or crypto is not installed                                                                                                                                
     echo "cryptography version check: OK"
+
 }
 
 function pipcryptoexists() {
@@ -159,6 +157,7 @@ srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/$branch
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
+echo "checking cryptography version"
 btwifidir="/usr/local/btwifiset"
 # check if crypto is installed - exit with warning if too old
 pipcryptoversionok
