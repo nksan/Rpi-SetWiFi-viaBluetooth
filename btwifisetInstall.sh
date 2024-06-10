@@ -98,19 +98,28 @@ function pipcryptoversionok() {
 
     function cryptofail() {
         local insmethod="$1"
-        echo $"
-    ? This system has a version of the python module 'cryptography' installed via $insmethod
-    that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.
-    See README - intallation issues for solution details.
+        echo $"                                                                                                                                                           
+    ? This system has a version of the python module 'cryptography' installed via $insmethod                                                                              
+    that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.                                                                     
+    See README - intallation issues for solution details.                                                                                                                 
     "
         exit 1
     }
 
     local cryptover line
     if [ "$(sudo which pip3)" != "" ]
+    then
+        cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
+        echo "Cryptover: " $cryptover
+        if [[ "$cryptover" == "" ]]
         then
-            cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
-            [[ "$cryptover" != "" ]] && [[ ${cryptover:0:1} -lt 3 ]] && cryptofail pip
+            echo "pip cryptography not installed"
+        elif [[ ${cryptover:0:1} -lt 3 ]]
+        then
+            cryptofail pip
+        else
+            return 0
+        fi
     fi
 
     ispkginstalled python3-cryptography || return 0
@@ -119,13 +128,13 @@ function pipcryptoversionok() {
         if [[ "$line" =~ "Installed:" ]] && [[ ! "$line" =~ "(none)" ]] || [[ "$line" =~ "Candidate:" ]]
             then
                 ver="${line#*: }"
+                echo VER=$ver
                 [[ ${ver:0:1} -ge 3 ]] || cryptofail apt
         fi
     done < <($sudo apt policy python3-cryptography 2>/dev/null)
-    #output thid if either version is GE 3 or crypto is not installed
+    #output thid if either version is GE 3 or crypto is not installed                                                                                                     
     echo "cryptography version check: OK"
 
-}
 
 function pipcryptoexists() {
     #already know that if it exosts - crypto is OK
