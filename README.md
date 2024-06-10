@@ -17,7 +17,7 @@ The free iOS app BTBerryWifi  <a href="https://apps.apple.com/us/app/btberrywifi
 
 * See <a href="https://normfrenette.com/Set-wifi-via-bluetooth/iPhone-App-iPhone-app-usage">BTBerryWifi iOS App User guide</a>.
 
-For the app to work, the Python code in ******btwifiset.py*** -  must be installed on the RPi. The installer provided here sets up btwifiset.py to run automatically when the RPi boots up (for a default time duration of 15 minutes - this can be modified.)
+For the app to work, the Python code in ***btwifiset.py*** -  must be installed on the RPi. The installer provided here sets up btwifiset.py to run automatically when the RPi boots up (for a default time duration of 15 minutes - this can be modified.)
 
 So if your headless RPi might need to connect to a new wifi at some point, install btwifiset.py on the RPi now. Then, when you need it, you simply turn on(or reboot) the RPi, fire up the iOS ***BTBerryWifi*** app or your iPhone or iPad, and set the wifi credentials for your Pi.
 
@@ -67,11 +67,9 @@ The [blog](https://normfrenette.com/Set-wifi-via-bluetooth/Installation-Raspberr
 
 Useful if you want to control/understand what happens on your Raspberry Pi, learn more about package installation, bluettooh service or how to create a service of your own.
 
-TL;DR: just the steps - no explanation: see [last section here](#last-section).
+TL;DR: just the steps - no explanation: see [last section here](#user-content-manual-install-code).
 
-## Installation Issues:
-
-### exited with message: Cryptography too old
+## Installation Issues - exited with *Cryptography too old*:
 The install script has detected that you are running a legacy version of the Raspberry Pi OS ("Buster" - version 10) which already has the cryptography module installed.  However this version is old (version 2.x or less) - and will not work with the current Python Code on the Raspberry Pi.
 
 It was not possible for the install script to automatically update the cryptography module for you, since it might break some other program you are running.   
@@ -122,7 +120,9 @@ Extra features will be available to supporters of this work:
 
 ## Additional Information
 
-* <a href="https://normfrenette.com/Set-wifi-via-bluetooth/BTBerryWifi-Overview/#sectionTop">BTBerryWifi iOS App details</a>
+* [BTBerryWifi iOS App overview](https://normfrenette.com/Set-wifi-via-bluetooth/BTBerryWifi-Overview/#sectionTop)
+* [Supporter Extra Features](https://normfrenette.com/Set-wifi-via-bluetooth/Supporter-extra-features/#sectionTop)
+* [BTBerryWifi iOS App User Guide](https://normfrenette.com/Set-wifi-via-bluetooth/iPhone-App-iPhone-app-usage/#sectionTop)
 
 ## Code notes
 
@@ -146,7 +146,7 @@ I'm working on it... might be a few months yet...
 
 I have tested the bluetooth code (Kotlin). I have yet to write the UI for it.
 
-<h2 id="steps">Manual Install code:</h2>
+## Manual Install code:
 
 Here are the steps to install manually:
 
