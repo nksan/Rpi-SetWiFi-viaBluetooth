@@ -196,6 +196,8 @@ class WifiUtil:
                 ip6_msg += "\n" + ip 
             if not ip4_msg: ip4_msg = "not connected or available"
             if not ip6_msg: ip6_msg = "not connected or available"
+            mLOG.log(f'ip4: {ip4_msg}')
+            mLOG.log(f"ip6: {ip6_msg}")
             return {"ip4":ip4_msg,"ip6":ip6_msg}
 
 
@@ -1908,12 +1910,19 @@ class Notifications:
 
     @staticmethod
     def make_chunks(msg,to_send):
-        msg.encode(encoding = 'UTF-8', errors = 'strict')
-        truncate_percentage = min(150/len(msg),1.0)
-        truncate_at = int(truncate_percentage * len(msg))
-        to_send.append(msg[0:truncate_at])
-        remainder = msg[truncate_at:]
+        # returns a list of chunks , each a string
+        bmsg = msg.encode(encoding = 'UTF-8', errors = 'replace') #inserts question mark if character cannot be encoded
+        #truncate at 150 bytes
+        btruncated = bmsg[0:150]
+        #reconvert to string - ignoring the last bytes if not encodable because truncation cut the unicode not on a boundary
+        chunk_str = btruncated.decode('utf-8',errors='ignore')
+        #get the remainder (as a string)
+        remainder = msg[len(chunk_str):]
+        #add the chunked string to the lsit
+        to_send.append(chunk_str)
+
         if remainder: 
+            #if there is a remaninder - re-apply chunking on it, passing in the list of chunks (to_send) so far
             return(Notifications.make_chunks(remainder,to_send))
         else:
             return list(to_send)
@@ -1925,10 +1934,11 @@ class Notifications:
         #each chunk must have separator prefix to indicate it is a notification
         # all chucnk except last chunk must have separator suffix to indicate more to come
         json_str = json.dumps(msgObject)
-        chunked_json_str = Notifications.make_chunks(json_str,[])
-        for i in range(len(chunked_json_str)):
-            chunk_to_send = SEPARATOR + chunked_json_str[i]
-            if i+1 < len(chunked_json_str):
+        mLOG.log(f"json string to send:{json_str}")
+        chunked_json_list = Notifications.make_chunks(json_str,[])
+        for i in range(len(chunked_json_list)):
+            chunk_to_send = SEPARATOR + chunked_json_list[i]
+            if i+1 < len(chunked_json_list):
                 chunk_to_send += SEPARATOR
             try:
                 if never_encypt:
@@ -2746,7 +2756,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: June 08 2024 **\n")
+        mLOG.log("** Version date: June 11 2024 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()

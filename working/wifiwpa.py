@@ -129,6 +129,8 @@ class WifiUtil:
                 ip6_msg += "\n" + ip 
             if not ip4_msg: ip4_msg = "not connected or available"
             if not ip6_msg: ip6_msg = "not connected or available"
+            Log.log(f'ip4: {ip4_msg}')
+            Log.log(f"ip6: {ip6_msg}")
             return {"ip4":ip4_msg,"ip6":ip6_msg}
 
 
