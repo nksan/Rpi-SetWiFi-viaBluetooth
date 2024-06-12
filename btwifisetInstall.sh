@@ -71,7 +71,7 @@ function ispkginstalled() {
     else
         [[ "$iver" =~ "(none)" ]] && return 1 || return 0
     fi
-    return
+    return 1
 }
 function isdbusok() {
     #
@@ -106,30 +106,41 @@ function isdbusok() {
     return 1
 }
 
-function aptcryptook() {
-    #this checks if apt installed the cryptography package - is version >= 3
-     while read line
+function getaptver() {
+    # $1: package name
+    # $2: 'installed' or 'candidate'
+    #
+    # returns requested version string or "" if doesn't exist
+    local pkg="$1" vertype="$2" sstr
+    
+    case $vertype in
+	installed) sstr="Installed:"
+		   ;;
+	candidate) sstr="Candidate:"
+		   ;;
+    esac
+    while read line
     do
-        if [[ "$line" =~ "Installed:" ]] 
+        if [[ "$line" =~ "$sstr" ]]  && [[ ! "$line" =~ "(none)" ]]
             then
                 ver="${line#*: }"
-                echo VER=$ver
-                [[ ${ver:0:1} -ge 3 ]] && return 0|| return 1
+		echo "$ver"
+		return
         fi
-    done < <($sudo apt policy python3-cryptography 2>/dev/null)
-    #also return 1 if package not installed
-    return 1
+    done < <($sudo apt policy $pkg 2>/dev/null)
+    echo ""
+    return
 }
 
 function existingcryptoversionok() {
     #this is meant to stops execution (return 1) if a version of crypto is installed already and version is less then 3.x.y
     function cryptofail() {
         local insmethod="$1"
-        echo $"                                                                                                                                                                                      
-    ? This system has a version of the python module 'cryptography' installed via $insmethod                                                                                                         
-    that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.                                                                                                
-    See README - intallation issues for solution details.                                                                                                                                            
-    "
+        echo $"
+? This system has a version of the python module 'cryptography' installed via $insmethod
+that is too old. Replacing it could break apps on your system, so exiting now for you to resolve.
+See README - intallation issues for solution details.
+"
         exit 1
     }
 
@@ -145,23 +156,15 @@ function existingcryptoversionok() {
         fi
     fi
 
-    # checks if system has older apt cryptography installed - also stop if this is the case
-    while read line
-    do
-        if [[ "$line" =~ "Installed:" ]] 
-            then
-                ver="${line#*: }"
-                echo VER=$ver
-                [[ ${ver:0:1} -ge 3 ]] || cryptofail apt
-        fi
-    done < <($sudo apt policy python3-cryptography 2>/dev/null)
-    #either installed is >=3 or cryptography is not installed: continue execution                                                                                                                               
+    # check if system has older apt cryptography installed - also stop if this is the case
+    cryptover=$(getaptver python3-cryptography installed)
+    if [ "$cryptover" != "" ]
+    then
+        [[ ${cryptover:0:1} -ge 3 ]] || cryptofail apt
+    fi
     echo "cryptography version check: OK"
     return 0
 }
-
-
-
 
 #
 # Main code
@@ -245,9 +248,21 @@ do
 done
 
 # note at this point installing crypto with apt won't hurt - even if it already installed with pip.
+# But we'll try to avoid installing an unsatisfactory version. We already checked installed versions above
 if pkgexists python${pymajver}-cryptography 
 then
-    ! ispkginstalled $pkg && pycomponents="${pycomponents}python${pymajver}-cryptography "
+    if ! ispkginstalled python${pymajver}-cryptography
+    then
+	cryptver=$(getaptver python${pymajver}-cryptography candidate)
+	if [ "$cryptver" != "" ]
+	then
+	    # if candidate version is < 3 don't install. Get pip version below
+            if [[ ${cryptver:0:1} -ge 3 ]]
+	    then
+		pycomponents="${pycomponents}python${pymajver}-cryptography "
+	    fi
+	fi
+    fi
 fi
 
 # If python${pymajver}-dbus is available, install that. If not, install python${pymajver}-pip and then we'll pip install dbus-python
@@ -261,7 +276,7 @@ fi
 if [ "$pycomponents" != "" ]
 then
     echo "> Install required Python components: $pycomponents"
-    $sudo apt install $pycomponents  --yes
+    $sudo apt install $pycomponents  --yes --no-install-recommends
     sts=$?
     [ ! $sts ] && errexit "? Error returned from apt install ($sts)"
 fi
@@ -269,30 +284,20 @@ fi
 # If python${pymajver}-dbus is not available install dbus-python with pip
 if ! isdbusok
 then
-    #if ispkginstalled python${pymajver}-dbus && false # && false so this doesn't get executed; doesn't seem to be needed
-    #then
-	#echo "> Remove installed python${pymajver}-dbus in favor of newer version from pip install"
-	#$sudo apt remove python${pymajver}-dbus --yes
-    #fi
     echo "> pip3 install dbus-python since apt python${pymajver}-dbus version is not new enough"
     [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
-    echo bsp=$bsp
-    $sudo rm -f $btwifidir/pip-stderr.txt
-    (cat <<EOF
-# This output is only interesting and useful if the dbus-python or cryptography modules fail to install
-
-EOF
-    ) | $sudo bash -c "cat >$btwifidir/pip-stderr.txt"
-    $sudo pip3 install $bsp dbus-python --force-reinstall >/dev/null 2>/tmp/pip-stderr.txt
-    echo cat error file:
-    $sudo cat /tmp/pip-stderr.txt
+    #echo bsp=$bsp
+    $sudo pip3 install $bsp dbus-python --force-reinstall
     sts=$?
-    [ ! $sts ] && $sudo cat /tmp/pip-stderr.txt >> $btwifidir/pip-stderr.txt && rm -f /tmp/pip-stderr.txt && errexit "? Error returned from 'pip install dbus-python' ($sts)"
+    [ ! $sts ] && errexit "? Error returned from 'pip install dbus-python' ($sts)"
 fi
 
 # at this point the above will have installed cryptography with apt - if the packages exist
 # check if it was installed, if it had version >= 3, if not use pip
-if ! aptcryptook
+cryptver="$(getaptver python3-cryptography installed)"
+cv1="${cryptver:0:1}"
+cv1="${cv1:-1}"  # default to 1 to force pip install
+if [[ $cv1 -lt 3 ]]
 then
     if [ "$(type -p pip3)" == "" ]
     then
@@ -301,9 +306,9 @@ then
     fi
     [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
     echo "> Install cryptography with pip"
-    $sudo pip3 install cryptography $bsp 2>/tmp/pip-stderr.txt
+    $sudo pip3 install cryptography $bsp
     sts=$?
-    [ ! $sts ] && $sudo cat /tmp/pip-stderr.txt >> $btwifidir/pip-stderr.txt && rm -f /tmp/pip-stderr.txt && errexit "? Error returned from 'pip install dbus-python' ($sts)"
+    [ ! $sts ] && errexit "? Error returned from 'pip install cryptography' ($sts)"
 fi
 
 # Modify bluetooth service. Copy it to /etc/systemd/system, which will be used before the one in /lib/systemd/system
@@ -366,6 +371,7 @@ If not, reboot the system (this ensures btwifiset service starts correctly).
 "
 exit
 
+# Not used
 echo ""
 echo "> The system must be restarted before btwifiset will work"
 echo ""
