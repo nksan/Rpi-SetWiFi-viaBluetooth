@@ -37,9 +37,11 @@ function getcountrycode() {
 	    ctry=$($sudo grep "country=" $wpa | (IFS="=" ; read a ctry ; echo $ctry))
 	fi
     fi
+    
     [ "$ctry" == "" ] && ctry=US
     while [ 0 ]
     do
+    echo "Country code is needed for wpa_supplicant"
 	askdefault "Enter your country code" country "$ctry"
 	country=${country:0:2}
 	country=${country^^}
@@ -176,11 +178,11 @@ srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/$branch
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
-echo "checking cryptography version"
+echo "> Verifying installed cryptography version ..."
 btwifidir="/usr/local/btwifiset"
 # check if crypto is installed - exit with warning if too old
 existingcryptoversionok
-
+echo "Select where python files will be installed: "
 askdefault "btwifiset install directory" btwifidir "/usr/local/btwifiset"
 $sudo mkdir -p $btwifidir
 
@@ -215,6 +217,7 @@ do
     [[ "$f" =~ ".txt" ]] && $sudo chmod 644 $btwifidir/$f || $sudo chmod 755 $btwifidir/$f
 done
 
+echo "> Analysing wpa_supplicant.conf ..."
 # Create wpa_supplicant.conf always even if not needed
 if [ -f $wpa ]
 then
@@ -237,6 +240,7 @@ update_config=1
 EOF
     ) | $sudo bash -c "cat >$wpa"
 fi
+
 
 # V Assumes Python versions in the form of nn.nn.nn (which they all seem to be)
 pyver=$((python3 --version) | (read p version junk ; echo ${version%.*}))  # This gets, for example, 3.11
@@ -265,6 +269,7 @@ then
     fi
 fi
 
+echo "> Checking available python module dbus version..."
 # If python${pymajver}-dbus is available, install that. If not, install python${pymajver}-pip and then we'll pip install dbus-python
 if isdbusok
 then
@@ -281,6 +286,7 @@ then
     [ ! $sts ] && errexit "? Error returned from apt install ($sts)"
 fi
 
+echo "> checking dbus install status ..."
 # If python${pymajver}-dbus is not available install dbus-python with pip
 if ! isdbusok
 then
@@ -313,7 +319,7 @@ fi
 
 # Modify bluetooth service. Copy it to /etc/systemd/system, which will be used before the one in /lib/systemd/system
 # Leaving the one in /lib/systemd/system as delivered. Good practice!
-echo "> Update systemd configuration for bluetooth and btwifiset services"
+echo "> Check/Update systemd configuration for bluetooth and btwifiset services"
 $sudo rm -f /etc/systemd/system/bluetooth.service
 $sudo cp /lib/systemd/system/bluetooth.service /etc/systemd/system
 if ! sed -n '/^ExecStart/p' /etc/systemd/system/bluetooth.service | grep -q '\-\-experimental'
