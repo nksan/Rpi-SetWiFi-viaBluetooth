@@ -1,7 +1,7 @@
 # Rpi-SetWiFi-viaBluetooth - Version 2
 
 Configure the Wifi network on a Raspberry Pi via Bluetooth
-* Version 2: published June 8, 2024.
+* Version 2: published June 12, 2024.
 
 ## The Problem to be solved:
 
@@ -130,7 +130,7 @@ The *working* sub-directory in this repo contains the python files where the dev
 
 The file btwifiset.py installed by the installer is simply the combination of these three files with some small edits.
 
-## Code version: June 8 , 2004
+## Code version: June 12 , 2004
 
 There is no formal versioning of the btwifiset.py - other then major versions (this is version 2)
 

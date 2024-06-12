@@ -2073,16 +2073,21 @@ class Advertise(dbus.service.Object):
 
     def register_ad_error_callback(self,error):
         #Failed to register advertisement: org.bluez.Error.NotPermitted: Maximum advertisements reached
+        #now calling for restart if any error occurs here
         global NEED_RESTART
         try:
+            NEED_RESTART = True
             errorStr = f"{error}"
             if "Maximum" in errorStr:
-                mLOG.log("advertisement Maximum error - restarting bluetooth service")
-                NEED_RESTART = True
-                self.bleMgr.quitBT()
+                mLOG.log("advertisement Maximum error - calling for bluetooth service restart ")
+            else:
+                mLOG.log("advertisement registration error - other than maximum advertisement - call for restart")
         except:
             pass
+        mLOG.log(f"NEED_RESTART is set to {NEED_RESTART}")
         mLOG.log(f"Failed to register GATT advertisement {error}")
+        mLOG.log("calling quitBT()")
+        self.bleMgr.quitBT()
 
     def register(self):
         mLOG.log("Registering advertisement")
@@ -2101,7 +2106,8 @@ class Advertise(dbus.service.Object):
 
 
 class Application(dbus.service.Object):
-    def __init__(self):
+    def __init__(self,bleMgr):
+        self.bleMgr = bleMgr
         self.path = "/"
         self.services = []
         self.next_index = 0
@@ -2131,7 +2137,13 @@ class Application(dbus.service.Object):
         mLOG.log("GATT application registered")
 
     def register_app_error_callback(self, error):
+        #failing to register will call for restart 
+        global NEED_RESTART
+        NEED_RESTART = True
         mLOG.log("Failed to register application: " + str(error))
+        mLOG.log(f"app registration handler has set NEED_RESTART to {NEED_RESTART}")
+        mLOG.log("calling quitBT()")
+        self.bleMgr.quitBT()
 
     def register(self):
         #adapter = BleTools.find_adapter(self.bus)
@@ -2142,13 +2154,22 @@ class Application(dbus.service.Object):
         
     def unregister(self):
         mLOG.log(f"De-Registering Application - path: {self.get_path()}")
-        for service in self.services:
-            service.deinit()
-        self.service_manager.UnregisterApplication(self.get_path())
+        try:
+            for service in self.services:
+                service.deinit()
+        except Exception as exs:
+            mLOG.log(f"exception trying to deinit service")
+            mLOG.log(exs)
+        try:
+            self.service_manager.UnregisterApplication(self.get_path())
+        except Exception as exa:
+            mLOG.log(f"exception trying to unregister Application")
+            mLOG.log(exa)
         try:
             dbus.service.Object.remove_from_connection(self)
-        except Exception as ex:
-            mLOG.log(ex)
+        except Exception as exrc:
+            mLOG.log(f"dbus exception trying to remove object from connection")
+            mLOG.log(exrc)
         
 
 class Service(dbus.service.Object):
@@ -2714,16 +2735,23 @@ class BLEManager:
         self.counter = 0
 
     def quitBT(self):
+        mLOG.log(f"quitting Bluetooth - NEED_RESTART is {NEED_RESTART}")
+        self.cryptoManager.pi_info.saveInfo()
+        sleep(1)
         try:
-            if self.advert: self.advert.unregister()
-            if self.app: self.app.unregister()
+            if self.advert: 
+                mLOG.log("calling advertisement de-registration")
+                self.advert.unregister()
+            if self.app: 
+                mLOG.log("calling application de-registration")
+                self.app.unregister()
+            sleep(1)
         except Exception as ex:
             mLOG.log(ex)
         self.mainloop.quit()
 
     def graceful_quit(self,signum,frame):
         mLOG.log("stopping main loop on SIGTERM received")
-        sleep(0.5)
         self.quitBT()
 
     def check_button(self):
@@ -2745,8 +2773,6 @@ class BLEManager:
 
         if ConfigData.check_timeout():
             mLOG.log("BLE Server timeout - exiting...")
-            self.cryptoManager.pi_info.saveInfo()
-            sleep(1)
             self.quitBT()
             return False
         else:
@@ -2756,7 +2782,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: June 11 2024 **\n")
+        mLOG.log("** Version date: June 12 2024 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()
@@ -2770,7 +2796,7 @@ class BLEManager:
                     arg0 = "org.bluez.Device1",
                     path_keyword = "path")
                     
-        self.app = Application()
+        self.app = Application(self)
         #added passing a reference to the session dbus so service can register the userapp dbus listener when needed
         # justTesting = True
         wifiset_service = WifiSetService(0,self.mainloop,self.cryptoManager)
@@ -2791,7 +2817,7 @@ class BLEManager:
             mLOG.log("starting main loop")
             self.mainloop.run()
         except KeyboardInterrupt:
-            mLOG.log("stopping main loop")
+            mLOG.log("stopping main loop on keyboard interrupt")
             self.cryptoManager.pi_info.saveInfo()
             sleep(1)
             self.quitBT()
@@ -2800,13 +2826,17 @@ NEED_RESTART = False
 restart_count = 0
 
 def btRestart():
-        cmd = "systemctl restart bluetooth"
-        mLOG.log("restarting bluetooth")
-        r = subprocess.run(cmd, shell=True,text=True, timeout = 10)
+        cmd = "systemctl stop bluetooth"
+        mLOG.log("stopping bluetooth service")
+        rstop = subprocess.run(cmd, shell=True,text=True, timeout = 10)
+        sleep(1)
+        cmd = "systemctl start bluetooth"
+        mLOG.log(f"starting bluetooth service - restart count = {restart_count}")
+        rstart = subprocess.run(cmd, shell=True,text=True, timeout = 10)
         sleep(1)
         cmd = "systemctl --no-pager status bluetooth"
         mLOG.log("checking bluetooth")
-        s = subprocess.run(cmd, shell=True, text=True, timeout=10)
+        s = subprocess.run(cmd, shell=True, capture_output=True,encoding='utf-8',text=True, timeout=10)
         mLOG.log(s)
 
 
@@ -2819,8 +2849,9 @@ if __name__ == "__main__":
         blemgr.start()
         mLOG.log(f"ble manager has exited with need restart = {NEED_RESTART}")
         restart_count += 1
-        #allow only one restart of bluetooth (from advertisement error: maximum exceeded)
-        NEED_RESTART = NEED_RESTART and (restart_count < 2)
+        #allow only two restart of bluetooth (from advertisement error: maximum exceeded)
+        # in case we get one for failed app register and one for failed advert register
+        NEED_RESTART = NEED_RESTART and (restart_count < 3)
         if NEED_RESTART: btRestart()
 
     mLOG.log("btwifiset says: So long and thanks for all the fish")
