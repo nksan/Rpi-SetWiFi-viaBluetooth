@@ -37,11 +37,10 @@ function getcountrycode() {
 	    ctry=$($sudo grep "country=" $wpa | (IFS="=" ; read a ctry ; echo $ctry))
 	fi
     fi
-    
     [ "$ctry" == "" ] && ctry=US
     while [ 0 ]
     do
-    echo "Country code is needed for wpa_supplicant"
+    echo "> info: Country code is needed ofr wpa_supplicant"
 	askdefault "Enter your country code" country "$ctry"
 	country=${country:0:2}
 	country=${country^^}
@@ -95,7 +94,7 @@ function isdbusok() {
             return 0
         fi
     fi
-    echo checking apt
+    echo "> info: Checking apt for dbus module ..."
     [[ "$($sudo apt policy python${pymajver}-dbus 2>/dev/null)" == "" ]] && return 1
     while read line
     do
@@ -134,6 +133,29 @@ function getaptver() {
     return
 }
 
+function getpipver() {
+    # $1: package name
+    local ver
+    ver="$($sudo pip3 list 2>>/dev/null | grep $1 | (read mname mver ; echo $mver))"
+    echo "$ver"
+    return
+}
+
+function getinstalledcryptover0() {
+    local cryptover
+    cryptover="$(getpipver cryptography)"
+    [ "$cryptover" == "" ] && cryptover="$(getaptver installed)"
+    echo "$cryptover"
+    return
+}
+
+function getinstalledcryptover() {
+    local cryptover
+    cryptover=$(getinstalledcryptover0)
+    echo "${cryptover:0:1}"
+    return
+}
+
 function existingcryptoversionok() {
     #this is meant to stops execution (return 1) if a version of crypto is installed already and version is less then 3.x.y
     function cryptofail() {
@@ -147,15 +169,17 @@ See README - intallation issues for solution details.
     }
 
     local cryptover line
-    cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
+    # Can't use getinstalledcryptover here b/c want to differentiate between pip and apt
+    cryptover="$(getpipver cryptography)"
     if [[ "$cryptover" != "" ]]
     then
         if [[ ${cryptover:0:1} -lt 3 ]]
-        then
-            cryptofail pip
-        else
-            return 0
-        fi
+	then
+	    cryptofail pip
+	else
+	    echo "> cryptography version check: OK"
+	    return 0
+	fi
     fi
 
     # check if system has older apt cryptography installed - also stop if this is the case
@@ -164,7 +188,7 @@ See README - intallation issues for solution details.
     then
         [[ ${cryptover:0:1} -ge 3 ]] || cryptofail apt
     fi
-    echo "cryptography version check: OK"
+    echo "> cryptography version check: OK"
     return 0
 }
 
@@ -178,11 +202,11 @@ srcurl="https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/$branch
 echo $"
 Install btwifiset: Configure WiFi via Bluetooth
 "
-echo "> Verifying installed cryptography version ..."
+echo "> info: Checking cryptography version"
 btwifidir="/usr/local/btwifiset"
 # check if crypto is installed - exit with warning if too old
 existingcryptoversionok
-echo "Select where python files will be installed: "
+echo "> info: Select where python files will be installed"
 askdefault "btwifiset install directory" btwifidir "/usr/local/btwifiset"
 $sudo mkdir -p $btwifidir
 
@@ -216,8 +240,7 @@ do
     fi
     [[ "$f" =~ ".txt" ]] && $sudo chmod 644 $btwifidir/$f || $sudo chmod 755 $btwifidir/$f
 done
-
-echo "> Analysing wpa_supplicant.conf ..."
+echo "> info: Analysing wpa_suppicant.conf file ..."
 # Create wpa_supplicant.conf always even if not needed
 if [ -f $wpa ]
 then
@@ -241,7 +264,6 @@ EOF
     ) | $sudo bash -c "cat >$wpa"
 fi
 
-
 # V Assumes Python versions in the form of nn.nn.nn (which they all seem to be)
 pyver=$((python3 --version) | (read p version junk ; echo ${version%.*}))  # This gets, for example, 3.11
 pymajver=${pyver%.*}
@@ -258,7 +280,7 @@ then
     if ! ispkginstalled python${pymajver}-cryptography
     then
 	cryptver=$(getaptver python${pymajver}-cryptography candidate)
-	if [ "$cryptver" != "" ]
+	if [[ "$cryptver" != "" ]] && [[ "$(getpipver cryptography)" == "" ]]
 	then
 	    # if candidate version is < 3 don't install. Get pip version below
             if [[ ${cryptver:0:1} -ge 3 ]]
@@ -268,8 +290,7 @@ then
 	fi
     fi
 fi
-
-echo "> Checking available python module dbus version..."
+echo "> info: Checking available python module dbus version ..."
 # If python${pymajver}-dbus is available, install that. If not, install python${pymajver}-pip and then we'll pip install dbus-python
 if isdbusok
 then
@@ -285,12 +306,11 @@ then
     sts=$?
     [ ! $sts ] && errexit "? Error returned from apt install ($sts)"
 fi
-
-echo "> checking dbus install status ..."
+echo "> info: Checking dbus python module ..."
 # If python${pymajver}-dbus is not available install dbus-python with pip
 if ! isdbusok
 then
-    echo "> pip3 install dbus-python since apt python${pymajver}-dbus version is not new enough"
+    echo "> using pip3 to install dbus-python since apt python${pymajver}-dbus version too old"
     [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
     #echo bsp=$bsp
     $sudo pip3 install $bsp dbus-python --force-reinstall
@@ -303,23 +323,33 @@ fi
 cryptver="$(getaptver python3-cryptography installed)"
 cv1="${cryptver:0:1}"
 cv1="${cv1:-1}"  # default to 1 to force pip install
+ipipver=0
 if [[ $cv1 -lt 3 ]]
 then
-    if [ "$(type -p pip3)" == "" ]
+    if [ "$(getpipver cryptography)" == "" ]
     then
-	echo "> Install pip3 so we can install cryptography"
-	$sudo apt install python${pymajver}-pip || errexit "? Error installing python${pymajver}-pip"
+	if [ "$(type -p pip3)" == "" ]
+	then
+	    echo "> Install pip3 so we can install cryptography"
+	    $sudo apt install python${pymajver}-pip || errexit "? Error installing python${pymajver}-pip"
+	else
+	    cryptover="$($sudo pip3 list 2>/dev/null | grep cryptography | (read mname mver ; echo $mver))"
+	    [[ "$cryptover" != "" ]] && ipipver=1 # know it's a good version since previously checked
+	fi
+	if [ $ipipver -eq 0 ]
+	then
+	    [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
+	    echo "> Install cryptography with pip"
+	    $sudo pip3 install cryptography $bsp
+	    sts=$?
+	    [ ! $sts ] && errexit "? Error returned from 'pip install cryptography' ($sts)"
+	fi
     fi
-    [ -f /usr/lib/python${pyver}/EXTERNALLY-MANAGED ] && bsp="--break-system-packages" || bsp=""
-    echo "> Install cryptography with pip"
-    $sudo pip3 install cryptography $bsp
-    sts=$?
-    [ ! $sts ] && errexit "? Error returned from 'pip install cryptography' ($sts)"
 fi
 
 # Modify bluetooth service. Copy it to /etc/systemd/system, which will be used before the one in /lib/systemd/system
 # Leaving the one in /lib/systemd/system as delivered. Good practice!
-echo "> Check/Update systemd configuration for bluetooth and btwifiset services"
+echo ">info:Update systemd configuration for bluetooth and btwifiset services"
 $sudo rm -f /etc/systemd/system/bluetooth.service
 $sudo cp /lib/systemd/system/bluetooth.service /etc/systemd/system
 if ! sed -n '/^ExecStart/p' /etc/systemd/system/bluetooth.service | grep -q '\-\-experimental'
@@ -372,7 +402,9 @@ $sudo systemctl restart bluetooth
 sleep 3
 $sudo systemctl start btwifiset
 echo $"
-btwifiset is installed and should be acessible with the BTBerryWiFi app.
+btwifiset is installed and will run for 15 minutes, logging to syslog.
+(How to modify timeout and other options? See README - Additional Information links)
+Yould should be able to set wifi on a Raspberry Pi with the BTBerryWiFi iPhone app.
 If not, reboot the system (this ensures btwifiset service starts correctly).
 "
 exit

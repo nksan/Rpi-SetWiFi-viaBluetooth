@@ -335,41 +335,6 @@ class WPAConf:
             num = self.wpa_supplicant_ssids[ssid].number
             out = subprocess.run(f"wpa_cli -i wlan0 get_network {num} key_mgmt", shell=True,capture_output=True,encoding='utf-8',text=True).stdout
             self.wpa_supplicant_ssids[ssid].locked = "WPA-PSK" in out
-
-        ''' previous code:
-        self.wpa_supplicant_ssids = {}
-        filename = "/etc/wpa_supplicant/wpa_supplicant.conf"
-        Log.log(f'opening {filename}')
-        try:
-            f = open(filename, 'r')
-            data = f.read()
-            f.close()
-        except Exception as e:
-            Log.log(f'ERROR: {e}')
-        networks = re.findall('network=\{(.*?)\}', data, re.DOTALL)
-        # this retrieves the ssid names and whether they are locked (psk) or not (something else or nothing)
-        for network in networks:
-            try:
-                ssid = re.findall('ssid="(.*?)"\s+', network)[0]
-                if len(ssid)>0:
-                    if 'key_mgmt=NONE' in network:
-                        self.wpa_supplicant_ssids[ssid] = Wpa_Network(ssid,False)  #means open network
-                    elif "psk=" in network:
-                        self.wpa_supplicant_ssids[ssid] = Wpa_Network(ssid,True) # means password needed - locked
-                    if 'disabled=1' in network:
-                        # this is used to record the state of the wpa_supplicant.conf file upon start - so disabled network are kept that way unless connected to.
-                        self.wpa_supplicant_ssids[ssid].disabled = True
-                    Log.log(f'network: {self.wpa_supplicant_ssids[ssid].info()}')
-            except:
-                pass  #ignore ssid
-
-        self.retrieve_network_numbers() # get the network numbers seen by wpa_cli
-         #At this point, the Wpa_Network objects have their number assigned
-        '''
-        for ssid in self.wpa_supplicant_ssids:
-            Log.log(f"{ssid} locked:{self.wpa_supplicant_ssids[ssid].locked} num:{self.wpa_supplicant_ssids[ssid].number}")
-
-
         #get the ssid to which pi is currently connected
         current_ssid = subprocess.run("/sbin/iwgetid --raw", 
                         shell=True,capture_output=True,encoding='utf-8',text=True).stdout.strip()

@@ -402,41 +402,6 @@ class WPAConf:
             num = self.wpa_supplicant_ssids[ssid].number
             out = subprocess.run(f"wpa_cli -i wlan0 get_network {num} key_mgmt", shell=True,capture_output=True,encoding='utf-8',text=True).stdout
             self.wpa_supplicant_ssids[ssid].locked = "WPA-PSK" in out
-
-        ''' previous code:
-        self.wpa_supplicant_ssids = {}
-        filename = "/etc/wpa_supplicant/wpa_supplicant.conf"
-        mLOG.log(f'opening {filename}')
-        try:
-            f = open(filename, 'r')
-            data = f.read()
-            f.close()
-        except Exception as e:
-            mLOG.log(f'ERROR: {e}')
-        networks = re.findall('network=\{(.*?)\}', data, re.DOTALL)
-        # this retrieves the ssid names and whether they are locked (psk) or not (something else or nothing)
-        for network in networks:
-            try:
-                ssid = re.findall('ssid="(.*?)"\s+', network)[0]
-                if len(ssid)>0:
-                    if 'key_mgmt=NONE' in network:
-                        self.wpa_supplicant_ssids[ssid] = Wpa_Network(ssid,False)  #means open network
-                    elif "psk=" in network:
-                        self.wpa_supplicant_ssids[ssid] = Wpa_Network(ssid,True) # means password needed - locked
-                    if 'disabled=1' in network:
-                        # this is used to record the state of the wpa_supplicant.conf file upon start - so disabled network are kept that way unless connected to.
-                        self.wpa_supplicant_ssids[ssid].disabled = True
-                    mLOG.log(f'network: {self.wpa_supplicant_ssids[ssid].info()}')
-            except:
-                pass  #ignore ssid
-
-        self.retrieve_network_numbers() # get the network numbers seen by wpa_cli
-         #At this point, the Wpa_Network objects have their number assigned
-        '''
-        for ssid in self.wpa_supplicant_ssids:
-            mLOG.log(f"{ssid} locked:{self.wpa_supplicant_ssids[ssid].locked} num:{self.wpa_supplicant_ssids[ssid].number}")
-
-
         #get the ssid to which pi is currently connected
         current_ssid = subprocess.run("/sbin/iwgetid --raw", 
                         shell=True,capture_output=True,encoding='utf-8',text=True).stdout.strip()
@@ -1363,53 +1328,68 @@ class PiInfo:
 
 class NonceCounter:
     # numNonce is a 96 bit unsigned integer corresponds to max integer of 79228162514264337593543950335 (2 to the 96 power minus 1)
-    MAXNONCE = 2 ** 96 -1
+    MAXNONCE = 2 ** 64 -1
     '''
-    maintains and increment a nonce of 96 bit (using python integer which is as large as needed)
-    if increment goes above max value for 96 bit (12 bytes of FF)
+    maintains and increment a nonce of 12 bytes - 96 bit 
+    the 4 most significant bytes are used for the connected ipHone identifier
+    the least significant 8 bytes are the actual message counter.
+    RPi always sends a nonce with identifier = 0
+    if increment goes above max value for 64 bit
     looped is set to True, and counter restarts at zero
-    Note: looped flag is not reset automatically.  Outside users must reset it to false - after noting that counter has looped
+    Note: the logic to handle a looped counter has not yet been written.
+        this event should not happen in the btwifiset usage.
 
-    RPi manages counter for session.
-        starts with highest sent/received from last session
-        for every send, use increment using even numbers
-        for every received that made it across, update last_received
-        the last sent value is num_nonce
-        num_nonce and last_received are persisted
-        on a new connection the new init_number is max(num_nonce, last_received)
+    fot init: last_nonce is the 64 bit message counter saved on disk when previous session ended (infopi.json)
+
+    Last received mangement:
+        - iphone use 4 bytes of 12 bytes nonce as identifier.
+        - RPi keeps track of last received for each connected Iphone (there can be more than one)
+            usinf last_received_dict
+        - when iPhone disconnects - it should send a disconnect message - if RPi is Locked - the identifier is included:
+            when ipHone announces disconnection - remove key in dictionary
     '''
     def __init__(self,last_nonce):
         #last_nonce is normally saved on disk as Long
-        self.num_nonce = last_nonce+1  #num_nonce is basically last_sent
+        self.num_nonce = last_nonce+2  #num_nonce is the RPi message counter
         self.looped = False
-        self.last_received = self.num_nonce
-        #on start - one of the numbers is incorrect from a odd/even point of view. does not matter - always increment before sending
+        self.last_received_dict = {}  #key is iphone identifier, value is last received 8 bytes message counter from iphone Nonce
 
-    def currentMax(self):
-        return max(self.num_nonce,self.last_received)
+    def removeIdentifier(self,x_in_bytes):
+        identifier_bytes = x_in_bytes[8:]
+        key = str(int.from_bytes(identifier_bytes, byteorder='little', signed=False))
+        mLOG.log(f"Removing identifier form nonce dict: {key}")
+        self.last_received_dict.pop(key, None)
 
-    def loadInt(self,x):
-        self.num_nonce = x
-
-    def loadBytes(self,bx):
-        self.num_nonce = int.from_bytes(bx, byteorder='little', signed=False)
-
-    def loadLastReceived(self,x_in_bytes):
+    def checkLastReceived(self,x_in_bytes):
         '''
         checks last received
             if x_in_bytes passed in here is less or equal to current last receive - do nothing and return None
             otherwise, update and return the numerical value
+
+        return True if nonce is good, false if it is stale
         '''
         try:
-            new_last_x = int.from_bytes(x_in_bytes, byteorder='little', signed=False)
-            if new_last_x <= self.last_received:
-                return None
-            else:
-                self.last_received = int.from_bytes(x_in_bytes, byteorder='little', signed=False)
-                return self.last_received
+            message_counter_bytes = x_in_bytes[0:8]
+            identifier_bytes = x_in_bytes[8:]
+            message_counter = int.from_bytes(message_counter_bytes, byteorder='little', signed=False)
+            identifier_str = str(int.from_bytes(identifier_bytes, byteorder='little', signed=False))
+            mLOG.log(f"nonce received: {message_counter} - for identifier: {identifier_str}")
+            #if first time seeing this identifier - just accept the nonce as is 
+            if identifier_str not in self.last_received_dict:
+                self.last_received_dict[identifier_str] = message_counter
+                mLOG.log("this is a new identifier - added to last_received_dict")
+                return True
+            else :
+                if message_counter <= self.last_received_dict[identifier_str]:
+                    mLOG.log(f"stale nonce: last received = {self.last_received_dict[identifier_str]} - ignoring message")
+                    return False
+                else:
+                    mLOG.log(f"uodating last received to {message_counter}")
+                    self.last_received_dict[identifier_str] = message_counter
+                    return True
         except Exception as ex:
-            mLOG.log(f"loading last receive error: {ex}")
-            return None
+            mLOG.log(f"last receive check error: {ex}")
+            return False
 
     def increment(self):
         if self.num_nonce >= NonceCounter.MAXNONCE:
@@ -1417,13 +1397,6 @@ class NonceCounter:
             self.looped = True
         else:
             self.num_nonce += 1
-
-    def next_odd(self): 
-        self.increment()
-        if self.num_nonce % 2 == 0:
-            self.increment()
-        return self.num_nonce
-    
 
     def next_even(self): 
         self.increment()
@@ -1433,6 +1406,8 @@ class NonceCounter:
 
     @property
     def bytes(self):
+        #signed is False by default
+        # mapping num_nonce to 12 bytes means the 4 most significant bytes are always 0
         return self.num_nonce.to_bytes(12, byteorder='little')
 
 class RPiId:
@@ -1567,6 +1542,7 @@ class BTCrypto:
     def encryptForSending(self,message,nonce_counter):
         #none_counter of type NonceCounter
         chacha = ChaCha20Poly1305(self.hashed_pw)
+        mLOG.log(f'current nonce is: {nonce_counter.num_nonce}')
         nonce_counter.next_even()
         nonce = nonce_counter.bytes
         ct = chacha.encrypt(nonce, message.encode(encoding = 'UTF-8', errors = 'strict'),None)
@@ -1575,22 +1551,22 @@ class BTCrypto:
     def decryptFromReceived(self,cypher,nonce_counter):
         #combined message arrives with nonce (12 bytes first)
         #this returns the encode message as utf8 encoded bytes -> so btwifi characteristic can process them as before - including SEPARATOR 
-        #raise the error after printing the message - so it is caught im the calling method
+        #raise the error after printing the message - so it is caught in the calling method
         nonce_bytes = cypher[0:12]
         ct = bytes(cypher[12:])
         chacha = ChaCha20Poly1305(self.hashed_pw)
         try:
             message = chacha.decrypt(nonce_bytes, ct,None)
-            nonce_counter.loadLastReceived(nonce_bytes)
-            return message
+            #checkLastReceived updates the last receive dictionary if nonce is OK (ie not stale)
+            if nonce_counter.checkLastReceived(nonce_bytes) : return message
+            #if nonce was stale return a blank message which will be ignored
+            return b""
         except crypto_exceptions.InvalidTag as invTag:
             mLOG.log("crypto Invalid tag - cannot decode")
             raise invTag
         except Exception as ex: 
             mLOG.log(f"crypto decrypt error: {ex}")
             raise ex
-            
-        return None
 
 class RequestCounter:
 
@@ -1645,13 +1621,18 @@ class BTCryptoManager:
         self.timer = None
         self.request_counter = RequestCounter()
         self.pi_info = PiInfo()
-        self.nonce_counter = NonceCounter(self.pi_info.last_nonce+1)
+        self.nonce_counter = NonceCounter(self.pi_info.last_nonce)
+        self.quitting_msg = ""
         if self.pi_info.locked and self.pi_info.password is not None: 
             self.crypto = BTCrypto(self.pi_info.password)
         else:
             self.crypto = None
 
+    def setPhoneQuittingMessage(self,str):
+        self.quitting_msg = str
+
     def startTimer(self):
+        mLOG.log("starting timer")
         if self.timer is not None:
             self.timer.cancel()
         try:
@@ -1665,9 +1646,11 @@ class BTCryptoManager:
 
     def getinformation(self):
         if self.pi_info.password == None:
+            mLOG.log("pi info has no password")
             return "NoPassword".encode()
         rpi_id_bytes = bytes.fromhex(self.pi_info.rpi_id)
-        nonce_bytes = self.nonce_counter.currentMax().to_bytes(12, byteorder='little')
+        mLOG.log(f"pi info is sending nonce: {self.nonce_counter.num_nonce}")
+        nonce_bytes = self.nonce_counter.num_nonce.to_bytes(12, byteorder='little')
         if self.pi_info.locked:
             x = "LOCK".encode() #defaults to utf8
             return x+nonce_bytes+rpi_id_bytes
@@ -1675,22 +1658,22 @@ class BTCryptoManager:
             return  nonce_bytes+rpi_id_bytes
             
 
-    def requestLockRPi(self):
-        """
-        call this when user request to lock the RPi.
-        if there is no password - direct user to ssh into pi and create one using
-            "sudo python3 /usr/bin/btwifiset/setpassword.py password"
-            TODO: this is not implemented yet
-        returns True if password file exists and password is not empty string
-        returns False if password does not exists
-        """
-        if self.pi_info.locked: return True # pi is already locked - do nothing - this should not happen if IOS is managing correctly
-        if self.pi_info.password is not None: 
-            self.crypto = BTCrypto(self.pi_info.password)
-            self.pi_info.locked = True
-        return self.pi_info.password is not None
+    # def requestLockRPi(self):
+    #     """
+    #     call this when user request to lock the RPi.
+    #     if there is no password - direct user to ssh into pi and create one using
+    #         "sudo python3 /usr/bin/btwifiset/setpassword.py password"
+    #         TODO: this is not implemented yet
+    #     returns True if password file exists and password is not empty string
+    #     returns False if password does not exists
+    #     """
+    #     if self.pi_info.locked: return True # pi is already locked - do nothing - this should not happen if IOS is managing correctly
+    #     if self.pi_info.password is not None: 
+    #         self.crypto = BTCrypto(self.pi_info.password)
+    #         self.pi_info.locked = True
+    #     return self.pi_info.password is not None
     
-    def unknown(self,cypher):
+    def unknown(self,cypher,alreadyDecrypted = b""):
         """
         call this when a message is not recognized:
             - if RPi is unlocked - could be receiving an encrypyed lock request
@@ -1707,11 +1690,15 @@ class BTCryptoManager:
             #go to lock state to decrypt:
             self.pi_info.locked = True
             self.crypto = BTCrypto(self.pi_info.password)
-            try: 
-                #message is bytes
-                msg = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
-            except:
-                msg = b""
+            if alreadyDecrypted == b'\x1eLockRequest':
+                msg = alreadyDecrypted
+            else:
+                try: 
+                    #message is bytes
+                    msg = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
+                except:
+                    msg = b""
+
             if msg == b'\x1eLockRequest':  
                 #decryption is correct - save lock state and return "locked" encrypted
                 self.pi_info.saveInfo()
@@ -1725,6 +1712,7 @@ class BTCryptoManager:
                 self.unknown_response = "Unlocked"
                 reached_max_tries = self.request_counter.incrementCounter("lock_request")
                 #in theory we RPi should not see a 4th request because iphone should close connection - but just in case:
+                mLOG.log(f"unknown encrypted is not lock request: max tries is  {reached_max_tries}")
                 if reached_max_tries:
                     #do not disconnect yet - normally App will send a disconect message in clear
                     #but start timer to catch rogue app DDOS this pi
@@ -1777,40 +1765,64 @@ class BTCryptoManager:
             return message.encode('utf8')
         else:
             cypher = self.crypto.encryptForSending(message,self.nonce_counter)
-            self.pi_info.last_nonce = self.nonce_counter.currentMax()
-            return cypher
+            self.pi_info.last_nonce = self.nonce_counter.num_nonce
+            return b'\x1d'+cypher
 
-    def decrypt(self,cypher):
+    def decrypt(self,cypher,forceDecryption = False):
         #returns a string from the bytes received by bluetooth channel
-        try:
-            if self.crypto == None: 
+        if self.crypto == None and not forceDecryption: 
+            try:
                 #check if it can be decoded  with utf8 (it should be unless iphone is sending encrypted messages and pi is unlocked)
-                _ = cypher.decode() # defaults to utf8 adn strict error mode - should fail if encrypted msg
+                clear = cypher.decode() # defaults to utf8 adn strict error mode - should fail if encrypted msg
                 self.unknown_response = ""
-                return cypher
-            else:
+            except: 
+                #probably - cannot decode because a phone is sending encrypted unaware that another has unlocked the pi
+                #let the pi handle the message if the phone has correct password
+                mLOG.log("While unlock received apparent encrypted msg - decrypting...")
+                return self.decrypt(cypher,True)
+            mLOG.log(f" received cleat text: {clear}")
+            return cypher
+        else:
+            try:
                 #if error in decrypting - it is caught below
+                if forceDecryption: self.crypto = BTCrypto(self.pi_info.password)
                 msg_bytes = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
-                self.pi_info.last_nonce = self.nonce_counter.currentMax()
                 #since this could be a retry message while in garbled process, which is now OK:
                 if self.timer is not None:
                     self.timer.cancel
                     self.timer = None
                     self.request_counter.resetCounter()
                     self.unknown_response = ""
+                if  msg_bytes.decode(errors="ignore") == self.quitting_msg:
+                    self.nonce_counter.removeIdentifier(cypher[0:12])
+                if forceDecryption: 
+                    #special case: user is trying to lock and has correct password
+                    #not caught by unknwn since aboved called decrypt again with forceDecryption
+                    if msg_bytes == b'\x1eLockRequest':
+                        mLOG.log("received LockRequest - processing ...")
+                        #can't try to decrypt same message twice - it will be stale...
+                        self.crypto = None
+                        self.pi_info.locked = False
+                        self.unknown(cypher,msg_bytes)
+                        return b'\x1e'+"unknown".encode()  
+                    else :    
+                        self.pi_info.locked = False
+                        self.crypto = None
+
                 return msg_bytes
-        except:
-            #in case of inability to decode due to garbled channel or if lock - wrong password, 
-            #automatically send to unknown() method - which will set the correct response in
-            # in property unknown_response as a string 
-            self.unknown(cypher)
-            """
-            returning SEP + "unknown" to the calling method (WifiCharacteristic.WriteValue) 
-            will pass back the code "unknown" to the WifiSetService.register_SSID method.
-            This will serve as directive to WifiSetService.register_SSID method to return the content of 
-            this class variable self.unknown_response as a notification back to the iphone app.
-            """
-            return b'\x1e'+"unknown".encode()  
+            except:
+                #in case of inability to decode due to garbled channel or if lock - wrong password, 
+                #automatically send to unknown() method - which will set the correct response in
+                # in property unknown_response as a string 
+                self.unknown(cypher)
+                if forceDecryption: self.crypto = None
+                """
+                returning SEP + "unknown" to the calling method (WifiCharacteristic.WriteValue) 
+                will pass back the code "unknown" to the WifiSetService.register_SSID method.
+                This will serve as directive to WifiSetService.register_SSID method to return the content of 
+                this class variable self.unknown_response as a notification back to the iphone app.
+                """
+                return b'\x1e'+"unknown".encode()  
         
 
 
@@ -1885,13 +1897,24 @@ class ConfigData:
 
 class Notifications:
     """
-    
+    version 2 prefixes messages with the intended module target
+        example: wifi:READY2
+    to maitain compatibility with version 1 of the app, there should not be a prefix
+            example: READY
+    notification maintains the variable wifiprefix which is set to 
+            either "wifi" or blank "" depending of whether version1 of the iphone app
+            is making the request, or version 2 is.
+            This is detected via the type of AP list request APs versus AP2s (see registerSSID method)
+    note: this only applies to setNotifications which sends simple messages (not multipart)
+            foro json - it is only ever used in version2 so wifi: is always used
     """
 
     def __init__(self,cryptoMgr):
         self.cryptomgr = cryptoMgr # hold a reference to the cryptoMgr in wifiset service
         self.notifications = []  #array of (encoded) notifications to send - in bytes (not string)
         self.unlockingMsg = b''
+        self.messageCounter = 1
+        self.wifi_prefix = "wifi"
         #contains the current encoded unlocking messgae to test against 
         #   to detect if pi is unlocking after being locked - following user request
         #see notifications in wifiCharasteristic for handling.
@@ -1899,51 +1922,85 @@ class Notifications:
         # 
         # msg_bytes = self.service.cryptomgr.encrypt(msg)
 
-    def setNotification(self,msg):
-        #msg must encode in utf8 to less than 182 bytes or ios will truncate
-        msg_to_send = self.cryptomgr.encrypt(SEPARATOR + msg)
+    def reset(self):
+        self.notifications = []  #array of (encoded) notifications to send - in bytes (not string)
+        self.unlockingMsg = b''
+        self.messageCounter = 1
+        self.wifi_prefix = "wifi"
+
+    def setappVersionWifiPrefix(self,version):
+        #version is either 1 or 2
+        self.wifi_prefix = "" if version == 1 else "wifi"
+
+    def makePrefix(self,target):
+        #return prefix with ":" based on version
+        if target == "wifi":
+            return f"{self.wifi_prefix}:" if self.wifi_prefix else ""
+        else:
+            return f"{target}:"
+
+    def setNotification(self,msg,target):
+        """msg must encode in utf8 to less than 182 bytes or ios will truncate
+            msg_to_send is in bytes
+        """
+        mLOG.log(f"sending simple notification: {self.makePrefix(target) + msg}, encrypted: {self.cryptomgr.crypto is not None}")
+        msg_to_send = self.cryptomgr.encrypt(SEPARATOR + self.makePrefix(target) + msg)
         if msg == "Unlocking":
             self.unlockingMsg = msg_to_send
         else:
             self.unlockingMsg = b''
         self.notifications.append(msg_to_send)
 
-    @staticmethod
-    def make_chunks(msg,to_send):
+    def make_chunks(self,msg,to_send):
         # returns a list of chunks , each a string
         bmsg = msg.encode(encoding = 'UTF-8', errors = 'replace') #inserts question mark if character cannot be encoded
         #truncate at 150 bytes
-        btruncated = bmsg[0:150]
+        btruncated = bmsg[0:130]
         #reconvert to string - ignoring the last bytes if not encodable because truncation cut the unicode not on a boundary
         chunk_str = btruncated.decode('utf-8',errors='ignore')
         #get the remainder (as a string)
         remainder = msg[len(chunk_str):]
-        #add the chunked string to the lsit
+        #add the chunked string to the list
         to_send.append(chunk_str)
 
         if remainder: 
             #if there is a remaninder - re-apply chunking on it, passing in the list of chunks (to_send) so far
-            return(Notifications.make_chunks(remainder,to_send))
+            return(self.make_chunks(remainder,to_send))
         else:
             return list(to_send)
 
-    def setJsonNotification(self,msgObject,never_encypt = False):
+    def setJsonNotification(self,msgObject,target,never_encypt = False):
         #msgObject must be an array 
         #typically contains dictionaries - but could contain other json encodable objects
         #The total length of the json string can exceed 182 bytes in utf8 encoding
         #each chunk must have separator prefix to indicate it is a notification
         # all chucnk except last chunk must have separator suffix to indicate more to come
         json_str = json.dumps(msgObject)
-        mLOG.log(f"json string to send:{json_str}")
-        chunked_json_list = Notifications.make_chunks(json_str,[])
-        for i in range(len(chunked_json_list)):
-            chunk_to_send = SEPARATOR + chunked_json_list[i]
-            if i+1 < len(chunked_json_list):
-                chunk_to_send += SEPARATOR
+        chunked_json_list = self.make_chunks(json_str,[])
+       
+        if len(chunked_json_list) == 1:
+            #not multipart - send normal notification
+            mLOG.log(f"sending simple notification: {target}:{chunked_json_list[0]}")
+            encrypted_msg_to_send = self.cryptomgr.encrypt(SEPARATOR + f"{target}:{chunked_json_list[0]}")
+            self.notifications.append(encrypted_msg_to_send)
+            return
+        
+        #chunked_json_list = ["this is a test meassage ","in two parts."]
+        self.messageCounter += 1
+        total = len(chunked_json_list)
+        mLOG.log(f"sending multi part message to: {target} - number of parts: {total}")
+        for i in range(total):
+            prefix = f"multi{target}:{self.messageCounter}|{i+1}|{total}|"
+            chunk_to_send = SEPARATOR + prefix + chunked_json_list[i]
+            mLOG.log(f"sending part {i+1}:\n{chunk_to_send}")
+            #no longer need a separator at the end to indicate continuation
+            # if i+1 < len(chunked_json_list):
+            #     chunk_to_send += SEPARATOR
             try:
                 if never_encypt:
                     encrypted = chunk_to_send.encode('utf8')
                 else:
+                    mLOG.log(f"about to encrypt: {chunk_to_send}")
                     encrypted = self.cryptomgr.encrypt(chunk_to_send)
                 self.notifications.append(encrypted)
             except Exception as ex:
@@ -2032,7 +2089,7 @@ class Blue:
             """
             Blue.user_ended_session = Blue.user_requested_endSession and  (not pythonDict["ServicesResolved"]) 
             if Blue.user_ended_session:
-                mLOG.log("User has ended BT session/disconnected")
+                mLOG.log("User has notified  BT session/disconnected")
                 #ADD ANY ACTION ON USER ENDING SESSION HERE
                 Blue.user_ended_session = False
                 Blue.user_requested_endSession = False
@@ -2358,6 +2415,8 @@ class WifiSetService(Service):
         self.add_characteristic(WifiDataCharacteristic(0,self))
         self.add_characteristic(InfoCharacteristic(1,self))
         self.sender = None
+        self.phone_quitting_message = {"ssid":"#ssid-endBT#", "pw":"#pw-endBT#"}
+        self.cryptomgr.setPhoneQuittingMessage(self.phone_quitting_message["ssid"]+SEPARATOR+self.phone_quitting_message["pw"])
         # self.startSendingButtons()
         # self.startListeningToUserApp()
         
@@ -2376,7 +2435,7 @@ class WifiSetService(Service):
         """
         mLOG.log(f"received from user app: {msg}")
         msg_arr = [].append(msg)
-        self.notifications.setJsonNotification(msg_arr)
+        self.notifications.setJsonNotification(msg_arr,"button")
 
     def startSendingButtons(self):
         self.sender = BTDbusSender()
@@ -2434,22 +2493,26 @@ class WifiSetService(Service):
             elif val[1] == 'AP2s':
                 #version2 sends AP2s and gets a json object back:
                 #note: since version never reads APs one by one, self.AP_list is always empty
+                #sets the wifi prefix for notification using version 2
+                self.notifications.setappVersionWifiPrefix(2)
                 returned_list = self.mgr.get_list() #go get the list
                 temp_AP_list = []
                 for ap in returned_list:
                     temp_AP_list.append(ap.msg())
-                self.notifications.setNotification('READY2')
+                self.notifications.setNotification('READY2',"wifi")
                 mLOG.log(f'READY to send AP List as Json object\n AP List: {temp_AP_list}')
                 self.all_APs_dict = {"allAps":temp_AP_list}
-                self.notifications.setJsonNotification(self.all_APs_dict)
+                self.notifications.setJsonNotification(self.all_APs_dict,"wifi")
             elif val[1] == 'APs':
                 #version 1 of the phone app sends this code: APs
                 #after receiving notification READY - it reads the list one by one - with chracteristic read.
+                #sets the wifi prefix for notification using version 1
+                self.notifications.setappVersionWifiPrefix(1)
                 returned_list = self.mgr.get_list() #go get the list
                 self.AP_list = []
                 for ap in returned_list:
                     self.AP_list.append(ap.msg())
-                self.notifications.setNotification('READY')
+                self.notifications.setNotification('READY',"wifi")
                 mLOG.log(f'READY: AP List for ios: {self.AP_list}')
                 #this is needed for compatibility with verison 1 of the iphone app
                 # ap_connected = self.mgr.wpa.connected_AP
@@ -2460,30 +2523,34 @@ class WifiSetService(Service):
             #*********** LOCK Management:
             elif val[1] == "unknown":
                 # this handles the LOCK request which will have been sent encrypted while pi is unlocked
-                mLOG.log(f'sending result of unknown: {self.cryptomgr.unknown_response}')
-                self.notifications.setNotification(self.cryptomgr.unknown_response)
+                if self.cryptomgr.crypto:
+                    mLOG.log(f"rpi is locked - sending encrypted: {self.cryptomgr.unknown_response}")
+                else:
+                    mLOG.log(f"RPi is unlocked - sending in clear: {self.cryptomgr.unknown_response}")
+                #simulate response did not get there:
+                #return
+                self.notifications.setNotification(self.cryptomgr.unknown_response,"crypto")
             elif val[1] == "UnlockRequest":
-                #self.cryptomgr.disableCrypto() <- move to notification - must send response necrypted and then after disable crypto
-                self.notifications.setNotification('Unlocking')
+                #notification: - must send response encrypted and then afterwards disable crypto
+                self.notifications.setNotification('Unlocking',"crypto")
             elif val[1] == "CheckIn":
-                self.notifications.setNotification('CheckedIn')
-
+                self.notifications.setNotification('CheckedIn',"crypto")
             # *************** extra info:
             elif val[1] == "infoIP": 
                 ips = WifiUtil.get_ip_address()
-                self.notifications.setJsonNotification(ips)
+                self.notifications.setJsonNotification(ips,"wifi")
             elif val[1] == "infoMac": 
                 macs = WifiUtil.get_mac()
-                self.notifications.setJsonNotification(macs)
+                self.notifications.setJsonNotification(macs,"wifi")
             elif val[1] == "infoAP": 
                 ap = WifiUtil.scan_for_channel()
-                self.notifications.setJsonNotification(ap)
+                self.notifications.setJsonNotification(ap,"wifi")
             elif val[1] == "infoOther": 
                 othDict = WifiUtil.get_other_info()
                 if othDict is not None:
                     try:
                         #set never_encrypt so it is sent in clear text regardless of crypto status
-                        self.notifications.setJsonNotification(othDict,True)
+                        self.notifications.setJsonNotification(othDict,"wifi",True)
                     except:
                         pass
             elif val[1] == "infoAll": 
@@ -2491,13 +2558,13 @@ class WifiSetService(Service):
                 macs = WifiUtil.get_mac()
                 ap = WifiUtil.scan_for_channel()
                 oth = WifiUtil.get_other_info()
-                self.notifications.setJsonNotification(ips)
-                self.notifications.setJsonNotification(macs)
-                self.notifications.setJsonNotification(ap)
+                self.notifications.setJsonNotification(ips,"wifi")
+                self.notifications.setJsonNotification(macs,"wifi")
+                self.notifications.setJsonNotification(ap,"wifi")
                 if oth is not None:
                     try:
                         strDict = {"other":str(oth["other"])}
-                        self.notifications.setJsonNotification(strDict)
+                        self.notifications.setJsonNotification(strDict,"wifi",True)
                     except:
                         pass
 
@@ -2510,6 +2577,10 @@ class WifiSetService(Service):
                 self.startListeningToUserApp()
             # any other "command"  is assumed to be a button click or similar - to send to user app via dbus
             # validate it here first before sending
+            elif val[1] == "":
+                #blank message would normally be a stale nonce when pi is locked or failed to decrypt
+                mLOG.log("received message is blank - ignoring it")
+
             else:
                 try:  #this fails with error if dict key does not exists (ie it is not a button click)
                     button_info_dict = json.loads(val[1])
@@ -2533,21 +2604,21 @@ class WifiSetService(Service):
                 #   so network number is unknown (-1)
                 if self.current_requested_ssid: 
                     #Add Specific Codes and corresponding calls here.
-                    if self.current_requested_ssid == '#ssid-endBT#' and self.current_requested_pw == '#pw-endBT#':
+                    if self.current_requested_ssid == self.phone_quitting_message["ssid"] and self.current_requested_pw == self.phone_quitting_message["pw"]:
                         #user is ending BT session -  set up ending flag and wait for disconnection
                         Blue.user_requested_endSession = True
                         #return correct notification to signify to phone app to start disconnect process:
-                        self.notifications.setNotification('3111#ssid-endBT#')
+                        self.notifications.setNotification(f'3111{self.phone_quitting_message["ssid"]}',"wifi")
                         return
                     #normal code to connect to a ssid
                     mLOG.log(f'about to connect to ssid:{self.current_requested_ssid}, with password:{self.current_requested_pw}')
                     connected_ssid = self.mgr.request_connection(self.current_requested_ssid,self.current_requested_pw)
                     if len(connected_ssid)>0:
                         mLOG.log(f'adding {connected_ssid} to notifications')
-                        self.notifications.setNotification(connected_ssid)
+                        self.notifications.setNotification(connected_ssid,"wifi")
                     else:
                         mLOG.log(f'adding FAIL to notifications')
-                        self.notifications.setNotification('FAIL')
+                        self.notifications.setNotification('FAIL',"wifi")
             except Exception as ex:
                 mLOG.log("EERROR - ",ex)
                 
@@ -2626,9 +2697,9 @@ class WifiDataCharacteristic(Characteristic):
         mainloop checks here to see if there is something to "notify" iphone app
         note: ios expects to see the SEPARATOR prefixed to notification - otherwise notification is discarded
         why is Unlocking the pi done here?
-            - when pi is unlocked and user request to unlock - pi will reply witj "unlocking"
-            - but this must be sent encrypted (iphone app expects it encrypted: only when received will it stop encryting)
-            therefore after it is sent whit encryption, only then is crypto disabled on the pi.
+            - when pi is locked and user request to unlock - pi will reply with "crypto:unlocking"
+            - but this msg must be sent encrypted (iphone app expects it encrypted: only when received will it confirm unlock and stop encryting)
+            therefore after msg is sent whit encryption, only then is crypto disabled on the pi.
         '''
         if self.notifying:
             if len(self.service.notifications.notifications)>0:
@@ -2647,6 +2718,7 @@ class WifiDataCharacteristic(Characteristic):
 
     def StartNotify(self):
         mLOG.log(f'ios has started notifications for wifi info')
+        self.service.notifications.reset()
         if self.notifying:
             return
         self.notifying = True
@@ -2655,6 +2727,7 @@ class WifiDataCharacteristic(Characteristic):
 
     def StopNotify(self):
         mLOG.log(f'ios has stopped notifications for wifi info')
+        self.service.notifications.reset()
         self.notifying = False
 
     def ReadValue(self, options):
@@ -2782,7 +2855,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: June 12 2024 **\n")
+        mLOG.log("** Version date: June 20 2024 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()

@@ -84,13 +84,24 @@ class ConfigData:
 
 class Notifications:
     """
-    
+    version 2 prefixes messages with the intended module target
+        example: wifi:READY2
+    to maitain compatibility with version 1 of the app, there should not be a prefix
+            example: READY
+    notification maintains the variable wifiprefix which is set to 
+            either "wifi" or blank "" depending of whether version1 of the iphone app
+            is making the request, or version 2 is.
+            This is detected via the type of AP list request APs versus AP2s (see registerSSID method)
+    note: this only applies to setNotifications which sends simple messages (not multipart)
+            foro json - it is only ever used in version2 so wifi: is always used
     """
 
     def __init__(self,cryptoMgr):
         self.cryptomgr = cryptoMgr # hold a reference to the cryptoMgr in wifiset service
         self.notifications = []  #array of (encoded) notifications to send - in bytes (not string)
         self.unlockingMsg = b''
+        self.messageCounter = 1
+        self.wifi_prefix = "wifi"
         #contains the current encoded unlocking messgae to test against 
         #   to detect if pi is unlocking after being locked - following user request
         #see notifications in wifiCharasteristic for handling.
@@ -98,51 +109,85 @@ class Notifications:
         # 
         # msg_bytes = self.service.cryptomgr.encrypt(msg)
 
-    def setNotification(self,msg):
-        #msg must encode in utf8 to less than 182 bytes or ios will truncate
-        msg_to_send = self.cryptomgr.encrypt(SEPARATOR + msg)
+    def reset(self):
+        self.notifications = []  #array of (encoded) notifications to send - in bytes (not string)
+        self.unlockingMsg = b''
+        self.messageCounter = 1
+        self.wifi_prefix = "wifi"
+
+    def setappVersionWifiPrefix(self,version):
+        #version is either 1 or 2
+        self.wifi_prefix = "" if version == 1 else "wifi"
+
+    def makePrefix(self,target):
+        #return prefix with ":" based on version
+        if target == "wifi":
+            return f"{self.wifi_prefix}:" if self.wifi_prefix else ""
+        else:
+            return f"{target}:"
+
+    def setNotification(self,msg,target):
+        """msg must encode in utf8 to less than 182 bytes or ios will truncate
+            msg_to_send is in bytes
+        """
+        Log.log(f"sending simple notification: {self.makePrefix(target) + msg}, encrypted: {self.cryptomgr.crypto is not None}")
+        msg_to_send = self.cryptomgr.encrypt(SEPARATOR + self.makePrefix(target) + msg)
         if msg == "Unlocking":
             self.unlockingMsg = msg_to_send
         else:
             self.unlockingMsg = b''
         self.notifications.append(msg_to_send)
 
-    @staticmethod
-    def make_chunks(msg,to_send):
+    def make_chunks(self,msg,to_send):
         # returns a list of chunks , each a string
         bmsg = msg.encode(encoding = 'UTF-8', errors = 'replace') #inserts question mark if character cannot be encoded
         #truncate at 150 bytes
-        btruncated = bmsg[0:150]
+        btruncated = bmsg[0:130]
         #reconvert to string - ignoring the last bytes if not encodable because truncation cut the unicode not on a boundary
         chunk_str = btruncated.decode('utf-8',errors='ignore')
         #get the remainder (as a string)
         remainder = msg[len(chunk_str):]
-        #add the chunked string to the lsit
+        #add the chunked string to the list
         to_send.append(chunk_str)
 
         if remainder: 
             #if there is a remaninder - re-apply chunking on it, passing in the list of chunks (to_send) so far
-            return(Notifications.make_chunks(remainder,to_send))
+            return(self.make_chunks(remainder,to_send))
         else:
             return list(to_send)
 
-    def setJsonNotification(self,msgObject,never_encypt = False):
+    def setJsonNotification(self,msgObject,target,never_encypt = False):
         #msgObject must be an array 
         #typically contains dictionaries - but could contain other json encodable objects
         #The total length of the json string can exceed 182 bytes in utf8 encoding
         #each chunk must have separator prefix to indicate it is a notification
         # all chucnk except last chunk must have separator suffix to indicate more to come
         json_str = json.dumps(msgObject)
-        Log.log(f"json string to send:{json_str}")
-        chunked_json_list = Notifications.make_chunks(json_str,[])
-        for i in range(len(chunked_json_list)):
-            chunk_to_send = SEPARATOR + chunked_json_list[i]
-            if i+1 < len(chunked_json_list):
-                chunk_to_send += SEPARATOR
+        chunked_json_list = self.make_chunks(json_str,[])
+       
+        if len(chunked_json_list) == 1:
+            #not multipart - send normal notification
+            Log.log(f"sending simple notification: {target}:{chunked_json_list[0]}")
+            encrypted_msg_to_send = self.cryptomgr.encrypt(SEPARATOR + f"{target}:{chunked_json_list[0]}")
+            self.notifications.append(encrypted_msg_to_send)
+            return
+        
+        #chunked_json_list = ["this is a test meassage ","in two parts."]
+        self.messageCounter += 1
+        total = len(chunked_json_list)
+        Log.log(f"sending multi part message to: {target} - number of parts: {total}")
+        for i in range(total):
+            prefix = f"multi{target}:{self.messageCounter}|{i+1}|{total}|"
+            chunk_to_send = SEPARATOR + prefix + chunked_json_list[i]
+            Log.log(f"sending part {i+1}:\n{chunk_to_send}")
+            #no longer need a separator at the end to indicate continuation
+            # if i+1 < len(chunked_json_list):
+            #     chunk_to_send += SEPARATOR
             try:
                 if never_encypt:
                     encrypted = chunk_to_send.encode('utf8')
                 else:
+                    Log.log(f"about to encrypt: {chunk_to_send}")
                     encrypted = self.cryptomgr.encrypt(chunk_to_send)
                 self.notifications.append(encrypted)
             except Exception as ex:
@@ -231,7 +276,7 @@ class Blue:
             """
             Blue.user_ended_session = Blue.user_requested_endSession and  (not pythonDict["ServicesResolved"]) 
             if Blue.user_ended_session:
-                Log.log("User has ended BT session/disconnected")
+                Log.log("User has notified  BT session/disconnected")
                 #ADD ANY ACTION ON USER ENDING SESSION HERE
                 Blue.user_ended_session = False
                 Blue.user_requested_endSession = False
@@ -557,6 +602,8 @@ class WifiSetService(Service):
         self.add_characteristic(WifiDataCharacteristic(0,self))
         self.add_characteristic(InfoCharacteristic(1,self))
         self.sender = None
+        self.phone_quitting_message = {"ssid":"#ssid-endBT#", "pw":"#pw-endBT#"}
+        self.cryptomgr.setPhoneQuittingMessage(self.phone_quitting_message["ssid"]+SEPARATOR+self.phone_quitting_message["pw"])
         # self.startSendingButtons()
         # self.startListeningToUserApp()
         
@@ -575,7 +622,7 @@ class WifiSetService(Service):
         """
         Log.log(f"received from user app: {msg}")
         msg_arr = [].append(msg)
-        self.notifications.setJsonNotification(msg_arr)
+        self.notifications.setJsonNotification(msg_arr,"button")
 
     def startSendingButtons(self):
         self.sender = BTDbusSender()
@@ -633,22 +680,26 @@ class WifiSetService(Service):
             elif val[1] == 'AP2s':
                 #version2 sends AP2s and gets a json object back:
                 #note: since version never reads APs one by one, self.AP_list is always empty
+                #sets the wifi prefix for notification using version 2
+                self.notifications.setappVersionWifiPrefix(2)
                 returned_list = self.mgr.get_list() #go get the list
                 temp_AP_list = []
                 for ap in returned_list:
                     temp_AP_list.append(ap.msg())
-                self.notifications.setNotification('READY2')
+                self.notifications.setNotification('READY2',"wifi")
                 Log.log(f'READY to send AP List as Json object\n AP List: {temp_AP_list}')
                 self.all_APs_dict = {"allAps":temp_AP_list}
-                self.notifications.setJsonNotification(self.all_APs_dict)
+                self.notifications.setJsonNotification(self.all_APs_dict,"wifi")
             elif val[1] == 'APs':
                 #version 1 of the phone app sends this code: APs
                 #after receiving notification READY - it reads the list one by one - with chracteristic read.
+                #sets the wifi prefix for notification using version 1
+                self.notifications.setappVersionWifiPrefix(1)
                 returned_list = self.mgr.get_list() #go get the list
                 self.AP_list = []
                 for ap in returned_list:
                     self.AP_list.append(ap.msg())
-                self.notifications.setNotification('READY')
+                self.notifications.setNotification('READY',"wifi")
                 Log.log(f'READY: AP List for ios: {self.AP_list}')
                 #this is needed for compatibility with verison 1 of the iphone app
                 # ap_connected = self.mgr.wpa.connected_AP
@@ -659,30 +710,34 @@ class WifiSetService(Service):
             #*********** LOCK Management:
             elif val[1] == "unknown":
                 # this handles the LOCK request which will have been sent encrypted while pi is unlocked
-                Log.log(f'sending result of unknown: {self.cryptomgr.unknown_response}')
-                self.notifications.setNotification(self.cryptomgr.unknown_response)
+                if self.cryptomgr.crypto:
+                    Log.log(f"rpi is locked - sending encrypted: {self.cryptomgr.unknown_response}")
+                else:
+                    Log.log(f"RPi is unlocked - sending in clear: {self.cryptomgr.unknown_response}")
+                #simulate response did not get there:
+                #return
+                self.notifications.setNotification(self.cryptomgr.unknown_response,"crypto")
             elif val[1] == "UnlockRequest":
-                #self.cryptomgr.disableCrypto() <- move to notification - must send response necrypted and then after disable crypto
-                self.notifications.setNotification('Unlocking')
+                #notification: - must send response encrypted and then afterwards disable crypto
+                self.notifications.setNotification('Unlocking',"crypto")
             elif val[1] == "CheckIn":
-                self.notifications.setNotification('CheckedIn')
-
+                self.notifications.setNotification('CheckedIn',"crypto")
             # *************** extra info:
             elif val[1] == "infoIP": 
                 ips = wifi.WifiUtil.get_ip_address()
-                self.notifications.setJsonNotification(ips)
+                self.notifications.setJsonNotification(ips,"wifi")
             elif val[1] == "infoMac": 
                 macs = wifi.WifiUtil.get_mac()
-                self.notifications.setJsonNotification(macs)
+                self.notifications.setJsonNotification(macs,"wifi")
             elif val[1] == "infoAP": 
                 ap = wifi.WifiUtil.scan_for_channel()
-                self.notifications.setJsonNotification(ap)
+                self.notifications.setJsonNotification(ap,"wifi")
             elif val[1] == "infoOther": 
                 othDict = wifi.WifiUtil.get_other_info()
                 if othDict is not None:
                     try:
                         #set never_encrypt so it is sent in clear text regardless of crypto status
-                        self.notifications.setJsonNotification(othDict,True)
+                        self.notifications.setJsonNotification(othDict,"wifi",True)
                     except:
                         pass
             elif val[1] == "infoAll": 
@@ -690,13 +745,13 @@ class WifiSetService(Service):
                 macs = wifi.WifiUtil.get_mac()
                 ap = wifi.WifiUtil.scan_for_channel()
                 oth = wifi.WifiUtil.get_other_info()
-                self.notifications.setJsonNotification(ips)
-                self.notifications.setJsonNotification(macs)
-                self.notifications.setJsonNotification(ap)
+                self.notifications.setJsonNotification(ips,"wifi")
+                self.notifications.setJsonNotification(macs,"wifi")
+                self.notifications.setJsonNotification(ap,"wifi")
                 if oth is not None:
                     try:
                         strDict = {"other":str(oth["other"])}
-                        self.notifications.setJsonNotification(strDict)
+                        self.notifications.setJsonNotification(strDict,"wifi",True)
                     except:
                         pass
 
@@ -709,6 +764,10 @@ class WifiSetService(Service):
                 self.startListeningToUserApp()
             # any other "command"  is assumed to be a button click or similar - to send to user app via dbus
             # validate it here first before sending
+            elif val[1] == "":
+                #blank message would normally be a stale nonce when pi is locked or failed to decrypt
+                Log.log("received message is blank - ignoring it")
+
             else:
                 try:  #this fails with error if dict key does not exists (ie it is not a button click)
                     button_info_dict = json.loads(val[1])
@@ -732,21 +791,21 @@ class WifiSetService(Service):
                 #   so network number is unknown (-1)
                 if self.current_requested_ssid: 
                     #Add Specific Codes and corresponding calls here.
-                    if self.current_requested_ssid == '#ssid-endBT#' and self.current_requested_pw == '#pw-endBT#':
+                    if self.current_requested_ssid == self.phone_quitting_message["ssid"] and self.current_requested_pw == self.phone_quitting_message["pw"]:
                         #user is ending BT session -  set up ending flag and wait for disconnection
                         Blue.user_requested_endSession = True
                         #return correct notification to signify to phone app to start disconnect process:
-                        self.notifications.setNotification('3111#ssid-endBT#')
+                        self.notifications.setNotification(f'3111{self.phone_quitting_message["ssid"]}',"wifi")
                         return
                     #normal code to connect to a ssid
                     Log.log(f'about to connect to ssid:{self.current_requested_ssid}, with password:{self.current_requested_pw}')
                     connected_ssid = self.mgr.request_connection(self.current_requested_ssid,self.current_requested_pw)
                     if len(connected_ssid)>0:
                         Log.log(f'adding {connected_ssid} to notifications')
-                        self.notifications.setNotification(connected_ssid)
+                        self.notifications.setNotification(connected_ssid,"wifi")
                     else:
                         Log.log(f'adding FAIL to notifications')
-                        self.notifications.setNotification('FAIL')
+                        self.notifications.setNotification('FAIL',"wifi")
             except Exception as ex:
                 Log.log("EERROR - ",ex)
                 
@@ -825,9 +884,9 @@ class WifiDataCharacteristic(Characteristic):
         mainloop checks here to see if there is something to "notify" iphone app
         note: ios expects to see the SEPARATOR prefixed to notification - otherwise notification is discarded
         why is Unlocking the pi done here?
-            - when pi is unlocked and user request to unlock - pi will reply witj "unlocking"
-            - but this must be sent encrypted (iphone app expects it encrypted: only when received will it stop encryting)
-            therefore after it is sent whit encryption, only then is crypto disabled on the pi.
+            - when pi is locked and user request to unlock - pi will reply with "crypto:unlocking"
+            - but this msg must be sent encrypted (iphone app expects it encrypted: only when received will it confirm unlock and stop encryting)
+            therefore after msg is sent whit encryption, only then is crypto disabled on the pi.
         '''
         if self.notifying:
             if len(self.service.notifications.notifications)>0:
@@ -846,6 +905,7 @@ class WifiDataCharacteristic(Characteristic):
 
     def StartNotify(self):
         Log.log(f'ios has started notifications for wifi info')
+        self.service.notifications.reset()
         if self.notifying:
             return
         self.notifying = True
@@ -854,6 +914,7 @@ class WifiDataCharacteristic(Characteristic):
 
     def StopNotify(self):
         Log.log(f'ios has stopped notifications for wifi info')
+        self.service.notifications.reset()
         self.notifying = False
 
     def ReadValue(self, options):

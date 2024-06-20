@@ -72,53 +72,68 @@ class PiInfo:
 
 class NonceCounter:
     # numNonce is a 96 bit unsigned integer corresponds to max integer of 79228162514264337593543950335 (2 to the 96 power minus 1)
-    MAXNONCE = 2 ** 96 -1
+    MAXNONCE = 2 ** 64 -1
     '''
-    maintains and increment a nonce of 96 bit (using python integer which is as large as needed)
-    if increment goes above max value for 96 bit (12 bytes of FF)
+    maintains and increment a nonce of 12 bytes - 96 bit 
+    the 4 most significant bytes are used for the connected ipHone identifier
+    the least significant 8 bytes are the actual message counter.
+    RPi always sends a nonce with identifier = 0
+    if increment goes above max value for 64 bit
     looped is set to True, and counter restarts at zero
-    Note: looped flag is not reset automatically.  Outside users must reset it to false - after noting that counter has looped
+    Note: the logic to handle a looped counter has not yet been written.
+        this event should not happen in the btwifiset usage.
 
-    RPi manages counter for session.
-        starts with highest sent/received from last session
-        for every send, use increment using even numbers
-        for every received that made it across, update last_received
-        the last sent value is num_nonce
-        num_nonce and last_received are persisted
-        on a new connection the new init_number is max(num_nonce, last_received)
+    fot init: last_nonce is the 64 bit message counter saved on disk when previous session ended (infopi.json)
+
+    Last received mangement:
+        - iphone use 4 bytes of 12 bytes nonce as identifier.
+        - RPi keeps track of last received for each connected Iphone (there can be more than one)
+            usinf last_received_dict
+        - when iPhone disconnects - it should send a disconnect message - if RPi is Locked - the identifier is included:
+            when ipHone announces disconnection - remove key in dictionary
     '''
     def __init__(self,last_nonce):
         #last_nonce is normally saved on disk as Long
-        self.num_nonce = last_nonce+1  #num_nonce is basically last_sent
+        self.num_nonce = last_nonce+2  #num_nonce is the RPi message counter
         self.looped = False
-        self.last_received = self.num_nonce
-        #on start - one of the numbers is incorrect from a odd/even point of view. does not matter - always increment before sending
+        self.last_received_dict = {}  #key is iphone identifier, value is last received 8 bytes message counter from iphone Nonce
 
-    def currentMax(self):
-        return max(self.num_nonce,self.last_received)
+    def removeIdentifier(self,x_in_bytes):
+        identifier_bytes = x_in_bytes[8:]
+        key = str(int.from_bytes(identifier_bytes, byteorder='little', signed=False))
+        Log.log(f"Removing identifier form nonce dict: {key}")
+        self.last_received_dict.pop(key, None)
 
-    def loadInt(self,x):
-        self.num_nonce = x
-
-    def loadBytes(self,bx):
-        self.num_nonce = int.from_bytes(bx, byteorder='little', signed=False)
-
-    def loadLastReceived(self,x_in_bytes):
+    def checkLastReceived(self,x_in_bytes):
         '''
         checks last received
             if x_in_bytes passed in here is less or equal to current last receive - do nothing and return None
             otherwise, update and return the numerical value
+
+        return True if nonce is good, false if it is stale
         '''
         try:
-            new_last_x = int.from_bytes(x_in_bytes, byteorder='little', signed=False)
-            if new_last_x <= self.last_received:
-                return None
-            else:
-                self.last_received = int.from_bytes(x_in_bytes, byteorder='little', signed=False)
-                return self.last_received
+            message_counter_bytes = x_in_bytes[0:8]
+            identifier_bytes = x_in_bytes[8:]
+            message_counter = int.from_bytes(message_counter_bytes, byteorder='little', signed=False)
+            identifier_str = str(int.from_bytes(identifier_bytes, byteorder='little', signed=False))
+            Log.log(f"nonce received: {message_counter} - for identifier: {identifier_str}")
+            #if first time seeing this identifier - just accept the nonce as is 
+            if identifier_str not in self.last_received_dict:
+                self.last_received_dict[identifier_str] = message_counter
+                Log.log("this is a new identifier - added to last_received_dict")
+                return True
+            else :
+                if message_counter <= self.last_received_dict[identifier_str]:
+                    Log.log(f"stale nonce: last received = {self.last_received_dict[identifier_str]} - ignoring message")
+                    return False
+                else:
+                    Log.log(f"uodating last received to {message_counter}")
+                    self.last_received_dict[identifier_str] = message_counter
+                    return True
         except Exception as ex:
-            Log.log(f"loading last receive error: {ex}")
-            return None
+            Log.log(f"last receive check error: {ex}")
+            return False
 
     def increment(self):
         if self.num_nonce >= NonceCounter.MAXNONCE:
@@ -126,13 +141,6 @@ class NonceCounter:
             self.looped = True
         else:
             self.num_nonce += 1
-
-    def next_odd(self): 
-        self.increment()
-        if self.num_nonce % 2 == 0:
-            self.increment()
-        return self.num_nonce
-    
 
     def next_even(self): 
         self.increment()
@@ -142,6 +150,8 @@ class NonceCounter:
 
     @property
     def bytes(self):
+        #signed is False by default
+        # mapping num_nonce to 12 bytes means the 4 most significant bytes are always 0
         return self.num_nonce.to_bytes(12, byteorder='little')
 
 class RPiId:
@@ -276,6 +286,7 @@ class BTCrypto:
     def encryptForSending(self,message,nonce_counter):
         #none_counter of type NonceCounter
         chacha = ChaCha20Poly1305(self.hashed_pw)
+        Log.log(f'current nonce is: {nonce_counter.num_nonce}')
         nonce_counter.next_even()
         nonce = nonce_counter.bytes
         ct = chacha.encrypt(nonce, message.encode(encoding = 'UTF-8', errors = 'strict'),None)
@@ -284,22 +295,22 @@ class BTCrypto:
     def decryptFromReceived(self,cypher,nonce_counter):
         #combined message arrives with nonce (12 bytes first)
         #this returns the encode message as utf8 encoded bytes -> so btwifi characteristic can process them as before - including SEPARATOR 
-        #raise the error after printing the message - so it is caught im the calling method
+        #raise the error after printing the message - so it is caught in the calling method
         nonce_bytes = cypher[0:12]
         ct = bytes(cypher[12:])
         chacha = ChaCha20Poly1305(self.hashed_pw)
         try:
             message = chacha.decrypt(nonce_bytes, ct,None)
-            nonce_counter.loadLastReceived(nonce_bytes)
-            return message
+            #checkLastReceived updates the last receive dictionary if nonce is OK (ie not stale)
+            if nonce_counter.checkLastReceived(nonce_bytes) : return message
+            #if nonce was stale return a blank message which will be ignored
+            return b""
         except crypto_exceptions.InvalidTag as invTag:
             Log.log("crypto Invalid tag - cannot decode")
             raise invTag
         except Exception as ex: 
             Log.log(f"crypto decrypt error: {ex}")
             raise ex
-            
-        return None
 
 class RequestCounter:
 
@@ -354,13 +365,18 @@ class BTCryptoManager:
         self.timer = None
         self.request_counter = RequestCounter()
         self.pi_info = PiInfo()
-        self.nonce_counter = NonceCounter(self.pi_info.last_nonce+1)
+        self.nonce_counter = NonceCounter(self.pi_info.last_nonce)
+        self.quitting_msg = ""
         if self.pi_info.locked and self.pi_info.password is not None: 
             self.crypto = BTCrypto(self.pi_info.password)
         else:
             self.crypto = None
 
+    def setPhoneQuittingMessage(self,str):
+        self.quitting_msg = str
+
     def startTimer(self):
+        Log.log("starting timer")
         if self.timer is not None:
             self.timer.cancel()
         try:
@@ -374,9 +390,11 @@ class BTCryptoManager:
 
     def getinformation(self):
         if self.pi_info.password == None:
+            Log.log("pi info has no password")
             return "NoPassword".encode()
         rpi_id_bytes = bytes.fromhex(self.pi_info.rpi_id)
-        nonce_bytes = self.nonce_counter.currentMax().to_bytes(12, byteorder='little')
+        Log.log(f"pi info is sending nonce: {self.nonce_counter.num_nonce}")
+        nonce_bytes = self.nonce_counter.num_nonce.to_bytes(12, byteorder='little')
         if self.pi_info.locked:
             x = "LOCK".encode() #defaults to utf8
             return x+nonce_bytes+rpi_id_bytes
@@ -384,22 +402,22 @@ class BTCryptoManager:
             return  nonce_bytes+rpi_id_bytes
             
 
-    def requestLockRPi(self):
-        """
-        call this when user request to lock the RPi.
-        if there is no password - direct user to ssh into pi and create one using
-            "sudo python3 /usr/bin/btwifiset/setpassword.py password"
-            TODO: this is not implemented yet
-        returns True if password file exists and password is not empty string
-        returns False if password does not exists
-        """
-        if self.pi_info.locked: return True # pi is already locked - do nothing - this should not happen if IOS is managing correctly
-        if self.pi_info.password is not None: 
-            self.crypto = BTCrypto(self.pi_info.password)
-            self.pi_info.locked = True
-        return self.pi_info.password is not None
+    # def requestLockRPi(self):
+    #     """
+    #     call this when user request to lock the RPi.
+    #     if there is no password - direct user to ssh into pi and create one using
+    #         "sudo python3 /usr/bin/btwifiset/setpassword.py password"
+    #         TODO: this is not implemented yet
+    #     returns True if password file exists and password is not empty string
+    #     returns False if password does not exists
+    #     """
+    #     if self.pi_info.locked: return True # pi is already locked - do nothing - this should not happen if IOS is managing correctly
+    #     if self.pi_info.password is not None: 
+    #         self.crypto = BTCrypto(self.pi_info.password)
+    #         self.pi_info.locked = True
+    #     return self.pi_info.password is not None
     
-    def unknown(self,cypher):
+    def unknown(self,cypher,alreadyDecrypted = b""):
         """
         call this when a message is not recognized:
             - if RPi is unlocked - could be receiving an encrypyed lock request
@@ -416,11 +434,15 @@ class BTCryptoManager:
             #go to lock state to decrypt:
             self.pi_info.locked = True
             self.crypto = BTCrypto(self.pi_info.password)
-            try: 
-                #message is bytes
-                msg = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
-            except:
-                msg = b""
+            if alreadyDecrypted == b'\x1eLockRequest':
+                msg = alreadyDecrypted
+            else:
+                try: 
+                    #message is bytes
+                    msg = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
+                except:
+                    msg = b""
+
             if msg == b'\x1eLockRequest':  
                 #decryption is correct - save lock state and return "locked" encrypted
                 self.pi_info.saveInfo()
@@ -434,6 +456,7 @@ class BTCryptoManager:
                 self.unknown_response = "Unlocked"
                 reached_max_tries = self.request_counter.incrementCounter("lock_request")
                 #in theory we RPi should not see a 4th request because iphone should close connection - but just in case:
+                Log.log(f"unknown encrypted is not lock request: max tries is  {reached_max_tries}")
                 if reached_max_tries:
                     #do not disconnect yet - normally App will send a disconect message in clear
                     #but start timer to catch rogue app DDOS this pi
@@ -486,38 +509,62 @@ class BTCryptoManager:
             return message.encode('utf8')
         else:
             cypher = self.crypto.encryptForSending(message,self.nonce_counter)
-            self.pi_info.last_nonce = self.nonce_counter.currentMax()
-            return cypher
+            self.pi_info.last_nonce = self.nonce_counter.num_nonce
+            return b'\x1d'+cypher
 
-    def decrypt(self,cypher):
+    def decrypt(self,cypher,forceDecryption = False):
         #returns a string from the bytes received by bluetooth channel
-        try:
-            if self.crypto == None: 
+        if self.crypto == None and not forceDecryption: 
+            try:
                 #check if it can be decoded  with utf8 (it should be unless iphone is sending encrypted messages and pi is unlocked)
-                _ = cypher.decode() # defaults to utf8 adn strict error mode - should fail if encrypted msg
+                clear = cypher.decode() # defaults to utf8 adn strict error mode - should fail if encrypted msg
                 self.unknown_response = ""
-                return cypher
-            else:
+            except: 
+                #probably - cannot decode because a phone is sending encrypted unaware that another has unlocked the pi
+                #let the pi handle the message if the phone has correct password
+                Log.log("While unlock received apparent encrypted msg - decrypting...")
+                return self.decrypt(cypher,True)
+            Log.log(f" received cleat text: {clear}")
+            return cypher
+        else:
+            try:
                 #if error in decrypting - it is caught below
+                if forceDecryption: self.crypto = BTCrypto(self.pi_info.password)
                 msg_bytes = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
-                self.pi_info.last_nonce = self.nonce_counter.currentMax()
                 #since this could be a retry message while in garbled process, which is now OK:
                 if self.timer is not None:
                     self.timer.cancel
                     self.timer = None
                     self.request_counter.resetCounter()
                     self.unknown_response = ""
+                if  msg_bytes.decode(errors="ignore") == self.quitting_msg:
+                    self.nonce_counter.removeIdentifier(cypher[0:12])
+                if forceDecryption: 
+                    #special case: user is trying to lock and has correct password
+                    #not caught by unknwn since aboved called decrypt again with forceDecryption
+                    if msg_bytes == b'\x1eLockRequest':
+                        Log.log("received LockRequest - processing ...")
+                        #can't try to decrypt same message twice - it will be stale...
+                        self.crypto = None
+                        self.pi_info.locked = False
+                        self.unknown(cypher,msg_bytes)
+                        return b'\x1e'+"unknown".encode()  
+                    else :    
+                        self.pi_info.locked = False
+                        self.crypto = None
+
                 return msg_bytes
-        except:
-            #in case of inability to decode due to garbled channel or if lock - wrong password, 
-            #automatically send to unknown() method - which will set the correct response in
-            # in property unknown_response as a string 
-            self.unknown(cypher)
-            """
-            returning SEP + "unknown" to the calling method (WifiCharacteristic.WriteValue) 
-            will pass back the code "unknown" to the WifiSetService.register_SSID method.
-            This will serve as directive to WifiSetService.register_SSID method to return the content of 
-            this class variable self.unknown_response as a notification back to the iphone app.
-            """
-            return b'\x1e'+"unknown".encode()  
+            except:
+                #in case of inability to decode due to garbled channel or if lock - wrong password, 
+                #automatically send to unknown() method - which will set the correct response in
+                # in property unknown_response as a string 
+                self.unknown(cypher)
+                if forceDecryption: self.crypto = None
+                """
+                returning SEP + "unknown" to the calling method (WifiCharacteristic.WriteValue) 
+                will pass back the code "unknown" to the WifiSetService.register_SSID method.
+                This will serve as directive to WifiSetService.register_SSID method to return the content of 
+                this class variable self.unknown_response as a notification back to the iphone app.
+                """
+                return b'\x1e'+"unknown".encode()  
         
