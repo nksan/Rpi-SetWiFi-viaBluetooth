@@ -715,7 +715,7 @@ class WifiSetService(Service):
                 else:
                     Log.log(f"RPi is unlocked - sending in clear: {self.cryptomgr.unknown_response}")
                 #simulate response did not get there:
-                #return
+                # return
                 self.notifications.setNotification(self.cryptomgr.unknown_response,"crypto")
             elif val[1] == "UnlockRequest":
                 #notification: - must send response encrypted and then afterwards disable crypto
