@@ -53,14 +53,12 @@ systemctl status btwifiset
 >Look for the line that says *"Active: active (running)"* - if it's not there - reboot.
 
 ## Alternate Install Method (With Benefits)
-
-<a href="https://github.com/gitbls/sdm">sdm</a>, a tool you can use to easily and quickly build fully customized, ready-to-go RasPiOS systems, includes a plugin for btwifiset. `sdm` has a broad set of features, but it's also very easy to get started. For instance, the command
-```
-sudo sdm --customize --wpa /path/to/my/wpa_supplicant.conf --L10n --plugin btwifiset:"country=UK|timeout=30" --restart --password-pi mypassword 2023-02-21-raspios-bullseye-arm64.img 
-```
-will customize the IMG to have btwifiset installed and configured for the UK with a 30 minute timeout, WiFi configured, SSH enabled, configured for the same Keymap, Locale, and Timezone as the system on which sdm is running, a password set for the *pi* user.
-
-When you burn the customized IMG to an SSD/SD Card, you'll specify the hostname. After the system boots and finishes all First Boot customization, the system will reboot once, and will be fully operational, configured exactly as you want, and in this case, with btwifiset fully operational.
+ 
+<a href=https://github.com/gitbls/sdm>sdm</a>, a tool you can use to easily and quickly build fully customized, ready-to-go RasPiOS systems, includes a plugin for btwifiset.
+ 
+`sdm` has a broad set of features, but it's also very easy to get started with sdm.
+ 
+<a href=https://github.com/gitbls/sdm/blob/master/Docs/Installing-or-Removing-sdm.md>Install sdm</a> and then use the <a href=https://github.com/gitbls/sdm/blob/master/Docs/Example-Commands.md#official-getting-started-with-sdm-script>Official Getting Started with sdm Script</a> to jump-start your sdm usage and <a href=https://github.com/gitbls/sdm/blob/master/Docs/Example-Commands.md#example-commands>easily burn new disks</a> with btwifiset installed.
 
 ## Manual Installation:
 
@@ -105,9 +103,7 @@ Newer OS like Raspberry  PI bookworm install all necessary packages (with correc
 If you are on an older OS, or you came here to upgrade from version 1, the dbus and cryptography packages are either not available via apt, or are offered with older versions.  In this case the bash script provided installs these packages using Python Pip3, into a virtual environment  (venv) created under the /usr/local/btwifiset directory.  In this case the ExecStart line in the btwifiset service is modified to start with /venv/bin.python3.
 
 
-### iOS app BTBerryWifi 2.0 extra features (coming soon in the app)
-
-note: iOS app ***BTBerryWifi 2.0*** is in final testing - it is not yet published to the app store.
+### iOS app BTBerryWifi 2.0 extra features 
 
 Extra features are available to supporters of this work:
 
