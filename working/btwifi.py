@@ -288,11 +288,12 @@ class Advertise(dbus.service.Object):
 
     def __init__(self, index,bleMgr):
         self.bleMgr = bleMgr
+        self.hostname = wifi.WifiUtil.get_hostname()
         self.properties = dict()
         self.properties["Type"] = dbus.String("peripheral")
         self.properties["ServiceUUIDs"] = dbus.Array([UUID_WIFISET],signature='s')
         self.properties["IncludeTxPower"] = dbus.Boolean(True)
-        self.properties["LocalName"] = dbus.String("Wifiset")
+        self.properties["LocalName"] = dbus.String(self.hostname)
         self.path = "/org/bluez/advertise" + str(index)
         dbus.service.Object.__init__(self, Blue.bus, self.path)
         self.ad_manager = Blue.adv_mgr() 
@@ -889,7 +890,7 @@ class WifiDataCharacteristic(Characteristic):
             therefore after msg is sent whit encryption, only then is crypto disabled on the pi.
         '''
         if self.notifying:
-            if len(self.service.notifications.notifications)>0:
+            while len(self.service.notifications.notifications)>0:
                 thisNotification_bytes = self.service.notifications.notifications.pop(0)
                 #notification is in bytes, already has prefix separator and may be encrypted
                 needToUnlock = thisNotification_bytes == self.service.notifications.unlockingMsg
@@ -899,7 +900,8 @@ class WifiDataCharacteristic(Characteristic):
                 self.PropertiesChanged("org.bluez.GattCharacteristic1", {"Value": value}, [])
                 Log.log('notification sent')
                 if needToUnlock:
-                    self.service.cryptomgr.disableCrypto() 
+                    self.service.cryptomgr.disableCrypto()
+                    break 
                 
         return self.notifying
 

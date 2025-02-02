@@ -105,6 +105,13 @@ class WifiUtil:
             pass
         return found_ssids
 
+
+    @staticmethod
+    def get_hostname():
+        result = subprocess.run("hostname", 
+                                shell=True,capture_output=True,encoding='utf-8',text=True)
+        return result.stdout
+
     @staticmethod
     def get_ip_address():
         #returns dictionary 
@@ -511,6 +518,7 @@ class NetworkManager:
         ssidList = []
         out = subprocess.run("nmcli dev wifi rescan", 
                             shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        Log.log(f'rescan {out}')
         time.sleep(1)
         out = subprocess.run(
             "nmcli -f SIGNAL,SECURITY,SSID dev wifi list",

@@ -1,5 +1,8 @@
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography import exceptions as crypto_exceptions
 import re
@@ -97,6 +100,7 @@ class NonceCounter:
         self.num_nonce = last_nonce+2  #num_nonce is the RPi message counter
         self.looped = False
         self.last_received_dict = {}  #key is iphone identifier, value is last received 8 bytes message counter from iphone Nonce
+        self._useAES = False #assume using chacha as default
 
     def removeIdentifier(self,x_in_bytes):
         identifier_bytes = x_in_bytes[8:]
@@ -128,7 +132,7 @@ class NonceCounter:
                     Log.log(f"stale nonce: last received = {self.last_received_dict[identifier_str]} - ignoring message")
                     return False
                 else:
-                    Log.log(f"uodating last received to {message_counter}")
+                    Log.log(f"updating last received to {message_counter}")
                     self.last_received_dict[identifier_str] = message_counter
                     return True
         except Exception as ex:
@@ -153,6 +157,21 @@ class NonceCounter:
         #signed is False by default
         # mapping num_nonce to 12 bytes means the 4 most significant bytes are always 0
         return self.num_nonce.to_bytes(12, byteorder='little')
+    
+    @property
+    def padded_bytes(self):
+        #used for Android AES encryption
+        #signed is False by default
+        # mapping num_nonce to 16 bytes means the 8 most significant bytes are always 0
+        return self.num_nonce.to_bytes(16, byteorder='little')
+
+    @property
+    def useAES(self):
+        return self._useAES
+
+    @useAES.setter
+    def useAES(self, value):
+        self._useAES = value
 
 class RPiId:
     # FILERPIID = "rpiid"
@@ -262,6 +281,45 @@ class RPiId:
                 return mac[0]
         
         return None
+    
+class AndroidAES:
+    @staticmethod
+    def encrypt(plaintext, key,nonce_counter):
+        # Generate a random 16-byte IV
+        iv = nonce_counter.padded_bytes
+        
+        # Create a padder
+        padder = padding.PKCS7(128).padder()
+        padded_data = padder.update(plaintext) + padder.finalize()
+        
+        # Create an encryptor
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        
+        # Encrypt the padded data
+        ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+        print(''.join('{:02x}'.format(x) for x in ciphertext))
+        #always return a 12 byte nonce (to match chachapoly implementation
+        return nonce_counter.bytes + ciphertext
+
+    @staticmethod
+    def decrypt(ciphertext, key):
+        # Extract the IV (first 12 bytes)
+        iv = ciphertext[:12]
+        iv += bytes.fromhex("00000000")  #cypher text arrives with 12 bytes nonce - pad it to 16
+        ciphertext = ciphertext[12:]
+        
+        # Create a decryptor
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        
+        # Decrypt the ciphertext
+        padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+        
+        # Create an unpadder
+        unpadder = padding.PKCS7(128).unpadder()
+        plaintext = unpadder.update(padded_data) + unpadder.finalize()
+        return plaintext
 
 class BTCrypto:
     """
@@ -272,6 +330,30 @@ class BTCrypto:
         encrypt will increment counter to get the next nonce for encryption
         decrypt will record last_nonce (received) if message is decoded correctly
     note: nonce_counter is single instance maintained by BtCryptoManager - which is instantiated at start
+
+    Android vs iOS:
+    iOS was developped first using the latest encryption (Chacha20Poly1305)
+    Android: some of the older devices do not have access to ChaCha... so AES is used instead.
+    Since iOS App is already published, ChaCha... needs to be supported.
+    Since the code always react to a request from phone device, decrypt is always called first,
+        follwed by an encrypted response (Notification).
+    To support both encryption, when an encrypted message is received, both encryption are tried (iOS first):
+        - if they both fail we raise an exception (as before android)
+        - if one passes, the flag "useAES" is set accordingly.
+        note:   the flag useAES is store with nonce counter - which is instantiated only once.  
+                it cannot be sotred in BTCrypto since this class is re-instantiated everytime the encryption changes.
+        - when the encryption is then used for the response, it selects the correct encryption based on this flag.
+        - Note: the flag is set every time a decryption occur so the following encryption(s) always match.
+    This will however cause problem if two devices of different type (one iOS, one Android) connect at the same time:
+        Since notifications go to all devices registered, the device that is idle while the other request and encrypted action,
+        will received an encrypted message it cannot decrypt, and assume that it's password is stale:
+            - it will disconnect
+            - it will erase the password from the device.
+            - it will warn the user asking for the password.
+                - if user enters the password, this will be sent to the RPi, and be accepted, but the response
+                will go the the previous device, which will then see an undecryptable message and disconnect as well 
+            - users will basically block each other until one stops entering the password.
+    A notice will be provided on the blog to explain that multiple devices of diffrent types connecting at the same time is not suppported.
     """
 
     def __init__(self,pw):
@@ -285,22 +367,45 @@ class BTCrypto:
     
     def encryptForSending(self,message,nonce_counter):
         #none_counter of type NonceCounter
-        chacha = ChaCha20Poly1305(self.hashed_pw)
         Log.log(f'current nonce is: {nonce_counter.num_nonce}')
         nonce_counter.next_even()
         nonce = nonce_counter.bytes
-        ct = chacha.encrypt(nonce, message.encode(encoding = 'UTF-8', errors = 'strict'),None)
-        return nonce+ct 
+        if nonce_counter.useAES:
+            #Log.log(f'encrypting with AES')
+            return AndroidAES.encrypt(message.encode('utf8'),self.hashed_pw,nonce_counter)
+        else:
+            #IOS uses chachapoly
+            #Log.log(f'encrypting with ChaCha')
+            chacha = ChaCha20Poly1305(self.hashed_pw)
+            ct = chacha.encrypt(nonce, message.encode(encoding = 'UTF-8', errors = 'strict'),None)
+            return nonce+ct 
+        
+    def decryptAES(self,cypher,nonce_counter):
+        try:
+            nonce_bytes = cypher[0:12]
+            message = AndroidAES.decrypt(cypher,self.hashed_pw) 
+            if not nonce_counter.useAES: Log.log(f'AES encryption detected') # only warn if changing encryption
+            nonce_counter.useAES = True
+            if nonce_counter.checkLastReceived(nonce_bytes) :return message
+            #if nonce was stale return a blank message which will be ignored
+            return b""
+        except Exception as ex: 
+            Log.log(f"crypto decrypt error (AES): {ex}")
+            raise ex
 
-    def decryptFromReceived(self,cypher,nonce_counter):
+    def decryptChaCha(self,cypher,nonce_counter):
         #combined message arrives with nonce (12 bytes first)
         #this returns the encode message as utf8 encoded bytes -> so btwifi characteristic can process them as before - including SEPARATOR 
         #raise the error after printing the message - so it is caught in the calling method
+
+        #************ below is for ios chachapoly
         nonce_bytes = cypher[0:12]
         ct = bytes(cypher[12:])
         chacha = ChaCha20Poly1305(self.hashed_pw)
         try:
             message = chacha.decrypt(nonce_bytes, ct,None)
+            if nonce_counter.useAES : Log.log(f'ChaCha encryption detected') #only warn if changing encryption
+            nonce_counter.useAES = False
             #checkLastReceived updates the last receive dictionary if nonce is OK (ie not stale)
             if nonce_counter.checkLastReceived(nonce_bytes) : return message
             #if nonce was stale return a blank message which will be ignored
@@ -309,8 +414,34 @@ class BTCrypto:
             Log.log("crypto Invalid tag - cannot decode")
             raise invTag
         except Exception as ex: 
-            Log.log(f"crypto decrypt error: {ex}")
+            Log.log(f"crypto decrypt error(ChaCha): {ex}")
             raise ex
+        
+    def decryptFromReceived(self,cypher,nonce_counter):
+        #always try the previous known encryption most use case only have one phone connected
+        #Log.log(f"current decryption with  {'AES' if nonce_counter.useAES else 'ChaCha'}")
+        if nonce_counter.useAES:
+            Log.log("decrypting attempt with AES")
+            try:
+                encBytes = self.decryptAES(cypher,nonce_counter)
+            except Exception as ex:
+                try:
+                    Log.log("decrypting attempt Failed with AES - trying ChachaPoly")
+                    encBytes = self.decryptChaCha(cypher,nonce_counter)
+                except:
+                    raise ex
+        else:
+            Log.log("decrypting attempt with ChachaPoly")
+            try:
+                encBytes = self.decryptChaCha(cypher,nonce_counter)
+            except Exception as ex2:
+                try:
+                    Log.log("decrypting attempt Failed with AES - trying AES")
+                    encBytes = self.decryptAES(cypher,nonce_counter)
+                except:
+                    raise ex2
+        return encBytes
+
 
 class RequestCounter:
 
@@ -349,14 +480,14 @@ class BTCryptoManager:
     meant to be a singleton instantiated when code starts
     code is untested with multiple connections - but if multiple connections are allowed
     BTCryptoManager is available to all connections which implies:
-        - if RPi is locked nd requires encryption - it applies to all connection
+        - if RPi is locked and requires encryption - it applies to all connection
         - if RPi is unlocked - all connections communicate in clear until any of the connection locks the RPI
 
     when RPi receives a crypted message while unlocked, or a garbled message while locked:
         - the decrypting method will automatically call the unknown() method - to process it and decide the response
             adn stores it in the unknown_response property
-        - however it will return unknown as decrypted message so Chracteristic can process it and call the register_ssid() on its service.
-        - when the service sees this "unknown" - it can simply fetched the response for the processed cypher in the
+        - it will return unknown as decrypted message so Chracteristic can process it and call the register_ssid() on its service.
+        - when the service sees this "unknown" - it fetches the response for the processed cypher in the
             unknown_response property and send it via notification.
     """
 
@@ -401,21 +532,6 @@ class BTCryptoManager:
         else:
             return  nonce_bytes+rpi_id_bytes
             
-
-    # def requestLockRPi(self):
-    #     """
-    #     call this when user request to lock the RPi.
-    #     if there is no password - direct user to ssh into pi and create one using
-    #         "sudo python3 /usr/bin/btwifiset/setpassword.py password"
-    #         TODO: this is not implemented yet
-    #     returns True if password file exists and password is not empty string
-    #     returns False if password does not exists
-    #     """
-    #     if self.pi_info.locked: return True # pi is already locked - do nothing - this should not happen if IOS is managing correctly
-    #     if self.pi_info.password is not None: 
-    #         self.crypto = BTCrypto(self.pi_info.password)
-    #         self.pi_info.locked = True
-    #     return self.pi_info.password is not None
     
     def unknown(self,cypher,alreadyDecrypted = b""):
         """
@@ -529,7 +645,9 @@ class BTCryptoManager:
         else:
             try:
                 #if error in decrypting - it is caught below
+                #if come here because pi is already locked, self.crypto is already set, if not - need to set it:
                 if forceDecryption: self.crypto = BTCrypto(self.pi_info.password)
+                #Log.log( f"decryption is using password {self.pi_info.password}")
                 msg_bytes = self.crypto.decryptFromReceived(cypher,self.nonce_counter)
                 #since this could be a retry message while in garbled process, which is now OK:
                 if self.timer is not None:
@@ -540,11 +658,12 @@ class BTCryptoManager:
                 if  msg_bytes.decode(errors="ignore") == self.quitting_msg:
                     self.nonce_counter.removeIdentifier(cypher[0:12])
                 if forceDecryption: 
-                    #special case: user is trying to lock and has correct password
-                    #not caught by unknwn since aboved called decrypt again with forceDecryption
+                    #special case: user is trying to lock the Pi (which is unlocked) and has correct password
+                    #not exception caught on first pass (that called unkonwn) since aboved called decrypt again with forceDecryption
                     if msg_bytes == b'\x1eLockRequest':
                         Log.log("received LockRequest - processing ...")
-                        #can't try to decrypt same message twice - it will be stale...
+                        #can't let unknown try to decrypt the same message twice - it will be stale...
+                        # so pass the decrypted message to unknown as alreadyDecrypted
                         self.crypto = None
                         self.pi_info.locked = False
                         self.unknown(cypher,msg_bytes)
@@ -568,3 +687,11 @@ class BTCryptoManager:
                 """
                 return b'\x1e'+"unknown".encode()  
         
+# if __name__ == "__main__":
+#     bt = BTCryptoManager()
+#     if bt.crypto is not None:
+#         print(''.join(f'{b:02x}' for b in bt.crypto.hashed_pw))
+#     x = bt.encrypt("CheckIn")
+#     print(''.join(f'{b:02x}' for b in x))
+#     print([b for b in x])
+    
