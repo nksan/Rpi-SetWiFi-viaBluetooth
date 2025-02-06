@@ -2173,24 +2173,43 @@ class Blue:
 
     @staticmethod
     def set_adapter():
-        Blue.bus = dbus.SystemBus()
-        obj = Blue.bus.get_object('org.bluez','/')
-        obj_interface=dbus.Interface(obj,'org.freedesktop.DBus.ObjectManager')
-        all = obj_interface.GetManagedObjects()
-        for item in all.items(): #this gives a list of all bluez objects
-            # mLOG.log(f"BlueZ Adapter name: {item[0]}")
-            # mLOG.log(f"BlueZ Adapter data: {item[1]}\n")
-            # mLOG.log("******************************\n")
-            if  (item[0] == '/org/bluez/hci0') or ('org.bluez.LEAdvertisingManager1' in item[1].keys() and 'org.bluez.GattManager1' in item[1].keys() ):
-                #this the bluez adapter1 object that we need
-                # mLOG.log(f"Found BlueZ Adapter name: {item[0]}\n")
-                
-                Blue.adapter_name = item[0]
-                Blue.adapter_obj = Blue.bus.get_object('org.bluez',Blue.adapter_name)
-                #turn_on the adapter - to make sure (on rpi it may already be turned on)
-                props = dbus.Interface(Blue.adapter_obj,'org.freedesktop.DBus.Properties')
-                props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
-                break
+        try:
+            found_flag = False
+            Blue.bus = dbus.SystemBus()
+            obj = Blue.bus.get_object('org.bluez','/')
+            obj_interface=dbus.Interface(obj,'org.freedesktop.DBus.ObjectManager')
+            all = obj_interface.GetManagedObjects()
+            for item in all.items(): #this gives a list of all bluez objects
+                # mLOG.log(f"BlueZ Adapter name: {item[0]}")
+                # mLOG.log(f"BlueZ Adapter data: {item[1]}\n")
+                # mLOG.log("******************************\n")
+                if  (item[0] == '/org/bluez/hci0') or ('org.bluez.LEAdvertisingManager1' in item[1].keys() and 'org.bluez.GattManager1' in item[1].keys() ):
+                    #this the bluez adapter1 object that we need
+                    # mLOG.log(f"Found BlueZ Adapter name: {item[0]}\n")
+                    found_flag = True
+                    Blue.adapter_name = item[0]
+                    Blue.adapter_obj = Blue.bus.get_object('org.bluez',Blue.adapter_name)
+                    #turn_on the adapter - to make sure (on rpi it may already be turned on)
+                    props = dbus.Interface(Blue.adapter_obj,'org.freedesktop.DBus.Properties')
+
+                    props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
+                    props.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(0))
+                    props.Set("org.bluez.Adapter1", "PairableTimeout", dbus.UInt32(0))
+                    props.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(1))
+                    props.Set("org.bluez.Adapter1", "DiscoverableTimeout", dbus.UInt32(0))
+                    
+                    break
+            if not found_flag:
+                mLOG.log("No suitable Bluetooth adapter found")
+                #raise Exception("No suitable Bluetooth adapter found")
+            
+        except dbus.exceptions.DBusException as e:
+            mLOG.log(f"DBus error in set_adapter: {str(e)}")
+            raise
+        except Exception as e:
+            mLOG.log(f"Error in set_adapter: {str(e)}")
+            raise
+
 
     @staticmethod
     def adv_mgr(): 
@@ -2242,6 +2261,9 @@ class Advertise(dbus.service.Object):
         self.properties["ServiceUUIDs"] = dbus.Array([UUID_WIFISET],signature='s')
         self.properties["IncludeTxPower"] = dbus.Boolean(True)
         self.properties["LocalName"] = dbus.String(self.hostname)
+        self.properties["Flags"] = dbus.Byte(0x06) 
+        #flags: 0x02: "LE General Discoverable Mode"
+        #       0x04: "BR/EDR Not Supported"
         self.path = "/org/bluez/advertise" + str(index)
         dbus.service.Object.__init__(self, Blue.bus, self.path)
         self.ad_manager = Blue.adv_mgr() 
@@ -2392,7 +2414,8 @@ class Service(dbus.service.Object):
                         'Primary': self.primary,
                         'Characteristics': dbus.Array(
                                 self.get_characteristic_paths(),
-                                signature='o')
+                                signature='o'),
+                        'Secure': dbus.Array([], signature='s')  # Empty array means no security required
                 }
         }
 
@@ -2442,7 +2465,8 @@ class Characteristic(dbus.service.Object):
                         'Flags': self.flags,
                         'Descriptors': dbus.Array(
                                 self.get_descriptor_paths(),
-                                signature='o')
+                                signature='o'),
+                        'Secure': dbus.Array([], signature='s') 
                 }
         }
 
@@ -2509,6 +2533,7 @@ class Descriptor(dbus.service.Object):
                         'Characteristic': self.chrc.get_path(),
                         'UUID': self.uuid,
                         'Flags': self.flags,
+                        'Secure': dbus.Array([], signature='s') 
                 }
         }
 
@@ -2960,6 +2985,7 @@ class BLEManager:
             mLOG.log(ex)
         self.mainloop.quit()
 
+
     def graceful_quit(self,signum,frame):
         mLOG.log("stopping main loop on SIGTERM received")
         self.quitBT()
@@ -2992,7 +3018,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: February 02 2025 **\n")
+        mLOG.log("** Version date: February 06 2025 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()
