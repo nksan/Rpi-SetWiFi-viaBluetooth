@@ -314,6 +314,7 @@ class Advertise(dbus.service.Object):
         self.properties["IncludeTxPower"] = dbus.Boolean(True)
         self.properties["LocalName"] = dbus.String(self.hostname)
         self.properties["Flags"] = dbus.Byte(0x06) 
+
         #flags: 0x02: "LE General Discoverable Mode"
         #       0x04: "BR/EDR Not Supported"
         self.path = "/org/bluez/advertise" + str(index)
@@ -518,7 +519,9 @@ class Characteristic(dbus.service.Object):
                         'Descriptors': dbus.Array(
                                 self.get_descriptor_paths(),
                                 signature='o'),
-                        'Secure': dbus.Array([], signature='s') 
+                        'RequireAuthentication': dbus.Boolean(False),
+                        'RequireAuthorization': dbus.Boolean(False),
+                        'RequireEncryption': dbus.Boolean(False),
                 }
         }
 

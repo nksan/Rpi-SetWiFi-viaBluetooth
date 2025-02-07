@@ -2262,6 +2262,7 @@ class Advertise(dbus.service.Object):
         self.properties["IncludeTxPower"] = dbus.Boolean(True)
         self.properties["LocalName"] = dbus.String(self.hostname)
         self.properties["Flags"] = dbus.Byte(0x06) 
+
         #flags: 0x02: "LE General Discoverable Mode"
         #       0x04: "BR/EDR Not Supported"
         self.path = "/org/bluez/advertise" + str(index)
@@ -2466,7 +2467,9 @@ class Characteristic(dbus.service.Object):
                         'Descriptors': dbus.Array(
                                 self.get_descriptor_paths(),
                                 signature='o'),
-                        'Secure': dbus.Array([], signature='s') 
+                        'RequireAuthentication': dbus.Boolean(False),
+                        'RequireAuthorization': dbus.Boolean(False),
+                        'RequireEncryption': dbus.Boolean(False),
                 }
         }
 
@@ -3018,7 +3021,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: February 06 2025 **\n")
+        mLOG.log("** Version date: February 07 2025 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()
