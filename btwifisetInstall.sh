@@ -3,28 +3,42 @@
 # btwifiset service installer
 #
 
+NONINTERACTIVE=0
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes)
+            NONINTERACTIVE=1
+            ;;
+    esac
+done
+
 function errexit() {
     echo -e "$1"
     exit 1
 }
 
 function askyn() {
-    # Prompt in $1
-    local ans
-    echo -n "$1" '[y/N]? ' ; read ans < /dev/tty
-    case "$ans" in
-        y*|Y*) return 0 ;;
-        *) return 1 ;;
-    esac
+    if [ $NONINTERACTIVE -eq 1 ]; then
+        return 1  # Default to 'No' in non-interactive mode
+    else
+        local ans
+        echo -n "$1" '[y/N]? ' ; read ans < /dev/tty
+        case "$ans" in
+            y*|Y*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
 }
 
 function askdefault () {
-    # $1=prompt, $2=return variable $3=default-for-prompt-plus-default
-    # Defines the variable named in $2 with the user's response as its value
-    local pmpt=$1 dfl="$3" tmp=""
-    echo -n "$pmpt [Default: $dfl]: " ; read tmp < /dev/tty
-    [ "$tmp" == "" ] && tmp="$dfl"
-    eval "${2}=\"${tmp}\""     # Defines a variable with the return value
+    if [ $NONINTERACTIVE -eq 1 ]; then
+        eval "${2}=\"\${3}\""  # Use default value without prompting
+    else
+        local pmpt=$1 dfl="$3" tmp=""
+        echo -n "$pmpt [Default: $dfl]: " ; read tmp < /dev/tty
+        [ "$tmp" == "" ] && tmp="$dfl"
+        eval "${2}=\"${tmp}\""
+    fi
 }
 
 function getcountrycode() {
@@ -42,19 +56,23 @@ function getcountrycode() {
     fi
     
     [ "$ctry" == "" ] && ctry=US
-    while [ 0 ]
-    do
-    echo "> btwifiset needs your WiFi Country code"
-	askdefault "Enter your country code" country "$ctry"
-	country=${country:0:2}
-	country=${country^^}
-	if ! grep -q ^$country /usr/share/zoneinfo/iso3166.tab 
-	then
-	    echo "? '$country' is not a recognized country in /usr/share/zoneinfo/iso3166.tab"
-	else
-	    [ "$country" != "" ] && break
-	fi
-    done
+    if [ $NONINTERACTIVE -eq 1 ]; then
+        country=$ctry
+    else
+        while [ 0 ]
+        do
+        echo "> btwifiset needs your WiFi Country code"
+        askdefault "Enter your country code" country "$ctry"
+        country=${country:0:2}
+        country=${country^^}
+        if ! grep -q ^$country /usr/share/zoneinfo/iso3166.tab 
+        then
+            echo "? '$country' is not a recognized country in /usr/share/zoneinfo/iso3166.tab"
+        else
+            [ "$country" != "" ] && break
+        fi
+        done
+    fi
 }
 
 function pkgexists() {
