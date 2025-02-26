@@ -102,8 +102,9 @@ function getcountrycode() {
 
     country="$ctry"
 
-    # If in interactive mode, prompt to confirm or change
-    if [ $NONINTERACTIVE -eq 0 ]; then
+    # Skip user confirmation if country was provided via command line
+    if [ -z "$country_arg" ]; then
+        # Prompt user to confirm or change country code
         while true; do
             echo "> Detected WiFi country code: $country"
             askdefault "Enter your country code" new_country "$country"
