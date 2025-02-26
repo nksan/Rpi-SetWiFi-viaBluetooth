@@ -4,10 +4,14 @@
 #
 
 NONINTERACTIVE=0
+country_arg=""
 for arg in "$@"; do
     case "$arg" in
         -y|--yes)
             NONINTERACTIVE=1
+            ;;
+        --country=*)
+            country_arg="${arg#*=}"
             ;;
     esac
 done
@@ -43,34 +47,74 @@ function askdefault () {
 
 function getcountrycode() {
     # Get and validate country code, define variable "country" with that code
-    #
-    # $1: Default country
-    #
     local ctry=""
-    if [ -f $wpa ]
-    then
-	if $sudo grep -q "country=" $wpa >/dev/null 2>&1
-	then
-	    ctry=$($sudo grep "country=" $wpa | (IFS="=" ; read a ctry ; echo $ctry))
-	fi
-    fi
-    
-    [ "$ctry" == "" ] && ctry=US
-    if [ $NONINTERACTIVE -eq 1 ]; then
-        country=$ctry
-    else
-        while [ 0 ]
-        do
-        echo "> btwifiset needs your WiFi Country code"
-        askdefault "Enter your country code" country "$ctry"
-        country=${country:0:2}
-        country=${country^^}
-        if ! grep -q ^$country /usr/share/zoneinfo/iso3166.tab 
-        then
-            echo "? '$country' is not a recognized country in /usr/share/zoneinfo/iso3166.tab"
-        else
-            [ "$country" != "" ] && break
+
+    # Check if country was provided via command line
+    if [ -n "$country_arg" ]; then
+        ctry="${country_arg^^}"
+        ctry="${ctry:0:2}"
+        # Validate country code
+        if ! grep -q "^$ctry" /usr/share/zoneinfo/iso3166.tab; then
+            echo "? Invalid country code provided: $ctry"
+            exit 1
         fi
+        country="$ctry"
+        return  # Skip further checks and prompting
+    fi
+
+    # Proceed to detect country code if not provided via command line
+
+    # Try to get via iw reg get
+    if command -v iw >/dev/null 2>&1; then
+        ctry=$(iw reg get 2>/dev/null | grep -m 1 "country" | awk '{print $2}' | cut -d':' -f1)
+        ctry="${ctry^^}"
+        # Check if valid 2-letter code
+        if [ -z "$ctry" ] || [ ${#ctry} -ne 2 ]; then
+            ctry=""
+        fi
+    fi
+
+    # If not found, check NetworkManager's config
+    if [ -z "$ctry" ] && [ -f /etc/NetworkManager/NetworkManager.conf ]; then
+        ctry=$(grep -i '^wifi\.country' /etc/NetworkManager/NetworkManager.conf | cut -d'=' -f2)
+        ctry=$(echo "$ctry" | tr -d ' "' | tr '[:lower:]' '[:upper:]')
+        if [ -z "$ctry" ] || [ ${#ctry} -ne 2 ]; then
+            ctry=""
+        fi
+    fi
+
+    # If not found, check wpa_supplicant.conf
+    if [ -z "$ctry" ] && [ -f $wpa ]; then
+        ctry=$($sudo grep -i "country=" $wpa | head -1 | cut -d'=' -f2 | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+        if [ -z "$ctry" ] || [ ${#ctry} -ne 2 ]; then
+            ctry=""
+        fi
+    fi
+
+    # Default to US if all else fails
+    [ -z "$ctry" ] && ctry="US"
+
+    # Validate detected country code
+    if ! grep -q "^$ctry" /usr/share/zoneinfo/iso3166.tab; then
+        echo "? Detected country code '$ctry' is invalid."
+        exit 1
+    fi
+
+    country="$ctry"
+
+    # If in interactive mode, prompt to confirm or change
+    if [ $NONINTERACTIVE -eq 0 ]; then
+        while true; do
+            echo "> Detected WiFi country code: $country"
+            askdefault "Enter your country code" new_country "$country"
+            new_country=${new_country:0:2}
+            new_country=${new_country^^}
+            if grep -q "^$new_country" /usr/share/zoneinfo/iso3166.tab; then
+                country="$new_country"
+                break
+            else
+                echo "? '$new_country' is not a recognized country code."
+            fi
         done
     fi
 }
