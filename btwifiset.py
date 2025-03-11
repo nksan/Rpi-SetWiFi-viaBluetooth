@@ -252,7 +252,7 @@ class WifiUtil:
             return None
         else:
             try :
-                return {"other":str(WifiUtil.otherInfo())}
+                return {"other":str(oth)}
             except:
                 return None
 
@@ -260,8 +260,28 @@ class WifiUtil:
     @staticmethod
     def otherInfo():
         #1. remove this line:
-        info = None
+        #info = None
+        info = subprocess.run("free", 
+                shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        if (info):
+            try:
+                lines = info.strip().split('\n')
+                headers = lines[0].split()
+                mem_values = lines[1].split()
+                info = "Memory     total          Used\n"
+                info += f"                {mem_values[1]}     {mem_values[2]}\n\n"
+            except:
+                info = ""
+        else:
+            info = ""
 
+        try:
+            info += subprocess.run("vcgencmd measure_temp", 
+                shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        except:
+            info += ""
+            
+        #print(f"OtherInfo\n{info}")
         # 2. add code that generate a string representing the info you want
         #IMPORTANT: you must return a string (not an object!)
         """
@@ -313,6 +333,7 @@ class Wpa_Network:
         self.disabled = disabled
         self.number=number  #not use in network manager version
         self.network_name = network_name if (network_name != "") else ssid
+        #print(self.network_name, ssid)
         '''
         for Network Manager implementations, the name given to the network may not be exactly the same as the ssid exposed by the router.
         In some cases,  Network manager may add a number for example.
@@ -394,6 +415,7 @@ class WPAConf:
     
     def get_wpa_supplicant_ssids(self):
         #use for wpa_supplicant implementation only
+        #(Network Manager uses: get_NM_Known_networks/  mcli_known_networks)
         """
         This gets the list of SSID already in the wpa_supplicant.conf.
         ssids - returns list of tupples ( SSID name , psk= or key_mgmt=NONE)
@@ -437,6 +459,11 @@ class WPAConf:
         ssids = re.findall('(\d+)\s+([^\s]+)', out, re.DOTALL)  #\s+([^\s]+)
         #ssids is returned as: [('0', 'BELL671'), ('1', 'nksan')] - network number, ssid
         #no need to read network numbers as they are incremented started at 0
+        #IMPORTANT:
+        #   there could be more than one SSID of the same name in the conf file.
+        #   this implementation keeps the last entry and its network number
+        #   users of Mesh networks were complaining that two many entries were displayed with the  same name
+        #TODO: further testing with mesh network to ensure that keeping only the last entry works OK.
         mLOG.log(f'Networks configured in wpa_supplicant.conf: {ssids}')
         try: 
             for num, listed_ssid in ssids:
@@ -520,7 +547,7 @@ class WPAConf:
 
     def get_network_name(self,ssid):
         '''
-        pass in networks as a list of Wpa_Network , and ssid as siid published by router
+        ssid published by router
         return array of network names (used by Network Manager) for that ssid if it exists in the list networks
         return None if it does not
         normally there should only be one...
@@ -610,7 +637,26 @@ class NetworkManager:
                 found_ssids.append({'ssid':trimmedSSID, 'signal':signal_strength, 'encrypt':'WPA' in encryption})
         return found_ssids
     
+    def request_deletion(self,ssid):
+        """delete the network from network manager.
+        use with care: once done, password that was stored with the network is gone
+        User will need to enter password to connect again
+        """
+        #get the network name corresponding to the ssid (there could be more than one)
+        network_names = self.mgr.wpa.get_network_name(ssid)
+        if network_names is not None:
+            for network_name in network_names:
+                p = subprocess.Popen(["nmcli","connection","delete",f"{network_name}"])
+                p.wait()
+                p.terminate()
+        #IMPORTANT:
+        #at this point, the netwrok still exists in the list of known networks wpa_supplicant_ssids
+        # it is the responsibility of the phone app to call (AP2s) to get the list updated.
+        
     
+
+
+
     def request_connection(self,ssid,pw):
         """  notes on pw:
             - blank:  connecting to known network: just call "up"
@@ -809,7 +855,7 @@ class NetworkManager:
 
     def remove_known_network(self,known_network):
         '''
-            this removes a known network from the device, and moves it from known_network unknown network in list of AP
+            this removes a known network from the device, and moves it from known_network to unknown network in list of AP
         '''
         #check if network to remove is hidden:
 
@@ -874,6 +920,27 @@ class WpaSupplicant:
                     signal_strength = 0
                 found_ssids.append({'ssid':ssid, 'signal':signal_strength, 'encrypt':'WPA' in encryption})
         return found_ssids
+
+    def request_deletion(self,ssid): 
+        """
+            delete the network from network manager.
+            use with care: once done, password that was stored with the network is gone
+            User will need to enter password to connect again
+        """
+        # get the network
+    
+        try:
+             network_to_delete = self.mgr.wpa.wpa_supplicant_ssids[ssid]
+             self.remove_known_network(network_to_delete)
+        except KeyError:
+            # fails silently - no delete action is taken
+            pass
+        #IMPORTANT:
+        #at this point, the netwrok still exists in the list of known networks wpa_supplicant_ssids
+        # it is the responsibility of the phone app to call (AP2s) to get the list updated.
+        #ALSO:  if SSID appears more than oncein the conf file, 
+        #       only the last SSID (ast network number) will have been deleted
+
     
     def request_connection(self,ssid,pw):
         ssid_in_AP,ssid_in_wpa = self.mgr.where_is_ssid(ssid)
@@ -1132,7 +1199,7 @@ class WpaSupplicant:
         out = subprocess.run(f'wpa_cli -i wlan0 get_network {known_network.number} scan_ssid', 
                                 shell=True,capture_output=True,encoding='utf-8',text=True).stdout
         is_hidden = (f'{out}' == "1")
-        #this network is a hidden ssid - it will be removed (not added) from ap list as well
+        #this network is a hidden ssid - it will be removed (or will not added) from ap list 
         mLOG.log(f'out={out}| {known_network.ssid} to be removed is hidden?: {is_hidden}')
             
         #remove the network from Network Manager list of Connections on device
@@ -1238,11 +1305,14 @@ class WifiManager:
                 if known_network is not None:
                     # for Network manager implementation key is network NAME which may be different than ssid
                     # for wp_supplicant - calling this always return the same as the ssid
+                    #test for conflict: whereby the listed in network (in Network mgr or wpa conf file) is locked
+                    #       and live network is showing unlocked (or vice-versa)
                     if known_network.locked != ap.locked:
-                        #TODO:  remove network from known network and make sure it shows as new network
+                        #conflict exists - remove network from Netwrok manager or wpa conf file 
                         mLOG.log(f'info: {ap.ssid}: wpa locked:{known_network.locked} ap locked:{ap.locked}')
                         mLOG.log(f'known network {ap.ssid} in conflict - delete and move to unknown networks')
                         was_hidden = self.operations.remove_known_network(known_network)
+                        #note: in_supplicant was set False above - so network automatically listed as unknown
                     else :
                         ap.in_supplicant = True
                 #normally was_hidden is left to be false and network (known or not) is added to list_of_Aps
@@ -1254,6 +1324,10 @@ class WifiManager:
             except Exception as e:
                 mLOG.log(f'ERROR: {e}')
         return self.list_of_APs
+
+    def request_deletion(self,ssid):
+         #CALLED from Service
+         return self.operations.request_deletion(ssid)
 
     def request_connection(self,ssid,pw):
         #CALLED from Service
@@ -1441,21 +1515,22 @@ class RPiId:
     # FILERPIID = "rpiid"
 
     def __init__(self):
-        # self.rpi_id = self.readSavedId()
-        # if self.rpi_id is not None: return
-        #first try the cpu_id
-        new_id = self.getNewCpuId()
-        # then try the mac address of ethernet or wifi adapters
-        if new_id is None: new_id = self.getMacAddressNetworking()
-        #then try mac address of bluetooth
-        if new_id is None: new_id = self.getMacAdressBluetooth()
-        #if all else fail - create a random 12bytes integer
-        if new_id is None: new_id = str(int.from_bytes(random.randbytes(12), byteorder='little', signed=False))
-        #and saved the new_id for future reuse - so this does not have to run everytime
-        # self.savedId(new_id)
-        #rpi_id is the hex representation of the hash
-        #convert it to bytes for sending with bytearray.fromhex(hex_string) or bytes.fromhex(hex_string)
-        self.rpi_id = self.hashTheId(new_id)
+        self.rpi_id = self.createComplexRpiID()
+
+    def createComplexRpiID(self):
+        cpuId = self.getNewCpuId()
+        wifiId = self.getMacAddressNetworking()
+        btId = self.getMacAdressBluetooth()
+        complexId = cpuId if cpuId is not None else ""
+        complexId += wifiId if wifiId is not None else ""
+        complexId += btId if btId is not None else ""
+        if complexId == "" : 
+            mLOG.log("no identifier found for this RPi - generating random id")
+            complexId = str(int.from_bytes(random.randbytes(12), byteorder='little', signed=False))
+        # print(cpuId,wifiId,btId)
+        # print(complexId)
+        # print(self.hashTheId(complexId))
+        return self.hashTheId(complexId)
 
     def hashTheId(self,id_str):
         #return the hex representeion of the hash
@@ -1488,8 +1563,8 @@ class RPiId:
     def getAdapterAddress(self,adapter):
         try:
             with open(f"{adapter}/address", 'r', encoding="utf-8") as f:
-                found_id = f.read()
-                return None if (found_id !=  "00:00:00:00:00:00" or found_id == "") else found_id
+                found_id = f.read().rstrip('\n')
+                return None if (found_id ==  "00:00:00:00:00:00" or found_id == "") else found_id
         except Exception as e:
             return None
     
@@ -1507,12 +1582,15 @@ class RPiId:
         #shortcut - most RPi have either eth0 or wlan0 - so try these two first
         eth0 = "/sys/class/net/eth0"
         wlan0 = "/sys/class/net/wlan0"
-        if os.path.isdir(eth0):
-            found_id = self.getAdapterAddress(eth0)
-        if found_id is not None: return found_id
+        #since this was written to allow the user to set a wifi SSID and password via bluetooth
+        #in most cases we can expect the wlan0 adapter to exists - so always use that first
         if os.path.isdir(wlan0):
             found_id = self.getAdapterAddress(wlan0)
         if found_id is not None: return found_id
+        if os.path.isdir(eth0):
+            found_id = self.getAdapterAddress(eth0)
+        if found_id is not None: return found_id
+        
 
         #for differnet linux OS - name maybe different - use this to find ethernet and wifi adapters if they exists
         interfaces = [ f.path for f in os.scandir("/sys/class/net") if f.is_dir() ]
@@ -1562,7 +1640,7 @@ class AndroidAES:
         
         # Encrypt the padded data
         ciphertext = encryptor.update(padded_data) + encryptor.finalize()
-        print(''.join('{:02x}'.format(x) for x in ciphertext))
+        # print(''.join('{:02x}'.format(x) for x in ciphertext))
         #always return a 12 byte nonce (to match chachapoly implementation
         return nonce_counter.bytes + ciphertext
 
@@ -1967,9 +2045,6 @@ SEPARATOR = SEPARATOR_HEX.decode()  # string representation can be concatenated 
 NOTIFY_TIMEOUT = 1000  #in ms - used for checking notifications
 BLE_SERVER_GLIB_TIMEOUT = 2500  # used for checking BLE Server timeout
 
-
-# **************************************************************************
-
 class BTDbusSender(dbus.service.Object):
     #only for BT process
     def __init__(self):
@@ -2197,7 +2272,7 @@ class Blue:
                     props.Set("org.bluez.Adapter1", "PairableTimeout", dbus.UInt32(0))
                     props.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(1))
                     props.Set("org.bluez.Adapter1", "DiscoverableTimeout", dbus.UInt32(0))
-                    
+
                     break
             if not found_flag:
                 mLOG.log("No suitable Bluetooth adapter found")
@@ -2616,11 +2691,11 @@ class WifiSetService(Service):
         nc = 0
         while nc < 4:
             nc += 1
-            print("nc:",nc)
+            # print("nc:",nc)
             data = ""
             if nc>1: data = f"data is {nc*1000}"
             button_dict = {"code":f"ButtonCode{nc}", "data":data}
-            print(button_dict)
+            # print(button_dict)
             json_str = json.dumps(button_dict)
             self.sender.send_signal(json_str)
             time.sleep(.7)
@@ -2632,7 +2707,7 @@ class WifiSetService(Service):
             - commands: val[0] must be blank string. then val[1] contains the command
                 -note: command can be json string (user defined buttons)
             - connection_request: val[0] must not be blank and is the requested SSID
-                                  val[1] is the password - which can be left blank
+                                  val[1] is the password - which can be left blank (or = NONE if open SSID)
         Notifications to ios are one of three 
             (all notifications will be pre-pended by SEPARATOR in notification callback "info_wifi_callback"  below as means 
              to differentiate notification from AP info read by ios)
@@ -2682,6 +2757,11 @@ class WifiSetService(Service):
                 # ap_connected = self.mgr.wpa.connected_AP
                 # if ap_connected != "0000":
                 #     self.notifications.setNotification(ap_connected)
+            elif val[1].startswith("DEL-"):
+                # ssid comes after the first four characters
+                ssid_to_delete = val[1][4:]
+                self.mgr.request_deletion(ssid_to_delete)
+                self.notifications.setNotification('DELETED',"wifi")
                 
             
             #*********** LOCK Management:
@@ -2915,7 +2995,7 @@ class WifiDataCharacteristic(Characteristic):
         messages are either:
              - SEP + command (for controling wifi on pi or asking for AP list)
              - ssid only (no SEP)
-             - ssid + SEP  (no paswword) : note: I dont think this occurs anymore
+             - ssid + SEP + NONE : indicates an open network that does not need a password
              - ssid + SEP + password + SEP + code    code = CP: call change_password; =AD: call add_network
         returns [first_string,second_string]
         everything that arrives before SEP goes into first_string
@@ -2939,7 +3019,7 @@ class WifiDataCharacteristic(Characteristic):
         #         received[index]+=str(val)
         #case where only ssid has arrived (no password because known network)
         if len(received) == 1 :
-            received.append("")
+            received.append("") #ensure at least two elements in received
         mLOG.log(f'from iphone received SSID/PW: {received}')
         ConfigData.reset_timeout()  # any data received from iphone resets the BLE Server timeout
         self.service.register_SSID(received)
@@ -3021,7 +3101,7 @@ class BLEManager:
 
     def start(self):
         mLOG.log("** Starting BTwifiSet - version 2 (nmcli/crypto)")
-        mLOG.log("** Version date: February 07 2025 **\n")
+        mLOG.log("** Version date: March 10 2025 **\n")
         mLOG.log(f'BTwifiSet timeout: {int(ConfigData.TIMEOUT/60)} minutes')
         mLOG.log("starting BLE Server")
         ConfigData.reset_timeout()

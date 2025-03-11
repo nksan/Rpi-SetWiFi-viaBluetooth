@@ -182,7 +182,7 @@ class WifiUtil:
             return None
         else:
             try :
-                return {"other":str(WifiUtil.otherInfo())}
+                return {"other":str(oth)}
             except:
                 return None
 
@@ -190,8 +190,28 @@ class WifiUtil:
     @staticmethod
     def otherInfo():
         #1. remove this line:
-        info = None
+        #info = None
+        info = subprocess.run("free", 
+                shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        if (info):
+            try:
+                lines = info.strip().split('\n')
+                headers = lines[0].split()
+                mem_values = lines[1].split()
+                info = "Memory     total          Used\n"
+                info += f"                {mem_values[1]}     {mem_values[2]}\n\n"
+            except:
+                info = ""
+        else:
+            info = ""
 
+        try:
+            info += subprocess.run("vcgencmd measure_temp", 
+                shell=True,capture_output=True,encoding='utf-8',text=True).stdout
+        except:
+            info += ""
+            
+        print(f"OtherInfo\n{info}")
         # 2. add code that generate a string representing the info you want
         #IMPORTANT: you must return a string (not an object!)
         """
@@ -243,6 +263,7 @@ class Wpa_Network:
         self.disabled = disabled
         self.number=number  #not use in network manager version
         self.network_name = network_name if (network_name != "") else ssid
+        print(self.network_name, ssid)
         '''
         for Network Manager implementations, the name given to the network may not be exactly the same as the ssid exposed by the router.
         In some cases,  Network manager may add a number for example.
@@ -324,6 +345,7 @@ class WPAConf:
     
     def get_wpa_supplicant_ssids(self):
         #use for wpa_supplicant implementation only
+        #(Network Manager uses: get_NM_Known_networks/  mcli_known_networks)
         """
         This gets the list of SSID already in the wpa_supplicant.conf.
         ssids - returns list of tupples ( SSID name , psk= or key_mgmt=NONE)
@@ -367,6 +389,11 @@ class WPAConf:
         ssids = re.findall('(\d+)\s+([^\s]+)', out, re.DOTALL)  #\s+([^\s]+)
         #ssids is returned as: [('0', 'BELL671'), ('1', 'nksan')] - network number, ssid
         #no need to read network numbers as they are incremented started at 0
+        #IMPORTANT:
+        #   there could be more than one SSID of the same name in the conf file.
+        #   this implementation keeps the last entry and its network number
+        #   users of Mesh networks were complaining that two many entries were displayed with the  same name
+        #TODO: further testing with mesh network to ensure that keeping only the last entry works OK.
         Log.log(f'Networks configured in wpa_supplicant.conf: {ssids}')
         try: 
             for num, listed_ssid in ssids:
@@ -450,7 +477,7 @@ class WPAConf:
 
     def get_network_name(self,ssid):
         '''
-        pass in networks as a list of Wpa_Network , and ssid as siid published by router
+        ssid published by router
         return array of network names (used by Network Manager) for that ssid if it exists in the list networks
         return None if it does not
         normally there should only be one...
@@ -540,7 +567,26 @@ class NetworkManager:
                 found_ssids.append({'ssid':trimmedSSID, 'signal':signal_strength, 'encrypt':'WPA' in encryption})
         return found_ssids
     
+    def request_deletion(self,ssid):
+        """delete the network from network manager.
+        use with care: once done, password that was stored with the network is gone
+        User will need to enter password to connect again
+        """
+        #get the network name corresponding to the ssid (there could be more than one)
+        network_names = self.mgr.wpa.get_network_name(ssid)
+        if network_names is not None:
+            for network_name in network_names:
+                p = subprocess.Popen(["nmcli","connection","delete",f"{network_name}"])
+                p.wait()
+                p.terminate()
+        #IMPORTANT:
+        #at this point, the netwrok still exists in the list of known networks wpa_supplicant_ssids
+        # it is the responsibility of the phone app to call (AP2s) to get the list updated.
+        
     
+
+
+
     def request_connection(self,ssid,pw):
         """  notes on pw:
             - blank:  connecting to known network: just call "up"
@@ -739,7 +785,7 @@ class NetworkManager:
 
     def remove_known_network(self,known_network):
         '''
-            this removes a known network from the device, and moves it from known_network unknown network in list of AP
+            this removes a known network from the device, and moves it from known_network to unknown network in list of AP
         '''
         #check if network to remove is hidden:
 
@@ -804,6 +850,27 @@ class WpaSupplicant:
                     signal_strength = 0
                 found_ssids.append({'ssid':ssid, 'signal':signal_strength, 'encrypt':'WPA' in encryption})
         return found_ssids
+
+    def request_deletion(self,ssid): 
+        """
+            delete the network from network manager.
+            use with care: once done, password that was stored with the network is gone
+            User will need to enter password to connect again
+        """
+        # get the network
+    
+        try:
+             network_to_delete = self.mgr.wpa.wpa_supplicant_ssids[ssid]
+             self.remove_known_network(network_to_delete)
+        except KeyError:
+            # fails silently - no delete action is taken
+            pass
+        #IMPORTANT:
+        #at this point, the netwrok still exists in the list of known networks wpa_supplicant_ssids
+        # it is the responsibility of the phone app to call (AP2s) to get the list updated.
+        #ALSO:  if SSID appears more than oncein the conf file, 
+        #       only the last SSID (ast network number) will have been deleted
+
     
     def request_connection(self,ssid,pw):
         ssid_in_AP,ssid_in_wpa = self.mgr.where_is_ssid(ssid)
@@ -1062,7 +1129,7 @@ class WpaSupplicant:
         out = subprocess.run(f'wpa_cli -i wlan0 get_network {known_network.number} scan_ssid', 
                                 shell=True,capture_output=True,encoding='utf-8',text=True).stdout
         is_hidden = (f'{out}' == "1")
-        #this network is a hidden ssid - it will be removed (not added) from ap list as well
+        #this network is a hidden ssid - it will be removed (or will not added) from ap list 
         Log.log(f'out={out}| {known_network.ssid} to be removed is hidden?: {is_hidden}')
             
         #remove the network from Network Manager list of Connections on device
@@ -1168,11 +1235,14 @@ class WifiManager:
                 if known_network is not None:
                     # for Network manager implementation key is network NAME which may be different than ssid
                     # for wp_supplicant - calling this always return the same as the ssid
+                    #test for conflict: whereby the listed in network (in Network mgr or wpa conf file) is locked
+                    #       and live network is showing unlocked (or vice-versa)
                     if known_network.locked != ap.locked:
-                        #TODO:  remove network from known network and make sure it shows as new network
+                        #conflict exists - remove network from Netwrok manager or wpa conf file 
                         Log.log(f'info: {ap.ssid}: wpa locked:{known_network.locked} ap locked:{ap.locked}')
                         Log.log(f'known network {ap.ssid} in conflict - delete and move to unknown networks')
                         was_hidden = self.operations.remove_known_network(known_network)
+                        #note: in_supplicant was set False above - so network automatically listed as unknown
                     else :
                         ap.in_supplicant = True
                 #normally was_hidden is left to be false and network (known or not) is added to list_of_Aps
@@ -1184,6 +1254,10 @@ class WifiManager:
             except Exception as e:
                 Log.log(f'ERROR: {e}')
         return self.list_of_APs
+
+    def request_deletion(self,ssid):
+         #CALLED from Service
+         return self.operations.request_deletion(ssid)
 
     def request_connection(self,ssid,pw):
         #CALLED from Service

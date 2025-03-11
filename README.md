@@ -138,9 +138,9 @@ The version 1 of btwifiset.py is available in branch "version1".  Note that the 
 
 ## Android:
 
-I'm working on it... might be a few months yet...
+I'm working on it... It'd been submitted to Google for approval. 
 
-I have tested the bluetooth code (Kotlin). I have yet to write the UI for it.
+Not sure how long it will take to get it through...
 
 ## Manual Install code:
 

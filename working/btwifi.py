@@ -19,9 +19,6 @@ SEPARATOR = SEPARATOR_HEX.decode()  # string representation can be concatenated 
 NOTIFY_TIMEOUT = 1000  #in ms - used for checking notifications
 BLE_SERVER_GLIB_TIMEOUT = 2500  # used for checking BLE Server timeout
 
-
-# **************************************************************************
-
 class BTDbusSender(dbus.service.Object):
     #only for BT process
     def __init__(self):
@@ -249,7 +246,7 @@ class Blue:
                     props.Set("org.bluez.Adapter1", "PairableTimeout", dbus.UInt32(0))
                     props.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(1))
                     props.Set("org.bluez.Adapter1", "DiscoverableTimeout", dbus.UInt32(0))
-                    
+
                     break
             if not found_flag:
                 Log.log("No suitable Bluetooth adapter found")
@@ -684,7 +681,7 @@ class WifiSetService(Service):
             - commands: val[0] must be blank string. then val[1] contains the command
                 -note: command can be json string (user defined buttons)
             - connection_request: val[0] must not be blank and is the requested SSID
-                                  val[1] is the password - which can be left blank
+                                  val[1] is the password - which can be left blank (or = NONE if open SSID)
         Notifications to ios are one of three 
             (all notifications will be pre-pended by SEPARATOR in notification callback "info_wifi_callback"  below as means 
              to differentiate notification from AP info read by ios)
@@ -734,6 +731,11 @@ class WifiSetService(Service):
                 # ap_connected = self.mgr.wpa.connected_AP
                 # if ap_connected != "0000":
                 #     self.notifications.setNotification(ap_connected)
+            elif val[1].startswith("DEL-"):
+                # ssid comes after the first four characters
+                ssid_to_delete = val[1][4:]
+                self.mgr.request_deletion(ssid_to_delete)
+                self.notifications.setNotification('DELETED',"wifi")
                 
             
             #*********** LOCK Management:
@@ -967,7 +969,7 @@ class WifiDataCharacteristic(Characteristic):
         messages are either:
              - SEP + command (for controling wifi on pi or asking for AP list)
              - ssid only (no SEP)
-             - ssid + SEP  (no paswword) : note: I dont think this occurs anymore
+             - ssid + SEP + NONE : indicates an open network that does not need a password
              - ssid + SEP + password + SEP + code    code = CP: call change_password; =AD: call add_network
         returns [first_string,second_string]
         everything that arrives before SEP goes into first_string
@@ -991,7 +993,7 @@ class WifiDataCharacteristic(Characteristic):
         #         received[index]+=str(val)
         #case where only ssid has arrived (no password because known network)
         if len(received) == 1 :
-            received.append("")
+            received.append("") #ensure at least two elements in received
         Log.log(f'from iphone received SSID/PW: {received}')
         ConfigData.reset_timeout()  # any data received from iphone resets the BLE Server timeout
         self.service.register_SSID(received)

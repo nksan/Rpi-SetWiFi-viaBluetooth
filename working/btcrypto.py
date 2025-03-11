@@ -177,21 +177,22 @@ class RPiId:
     # FILERPIID = "rpiid"
 
     def __init__(self):
-        # self.rpi_id = self.readSavedId()
-        # if self.rpi_id is not None: return
-        #first try the cpu_id
-        new_id = self.getNewCpuId()
-        # then try the mac address of ethernet or wifi adapters
-        if new_id is None: new_id = self.getMacAddressNetworking()
-        #then try mac address of bluetooth
-        if new_id is None: new_id = self.getMacAdressBluetooth()
-        #if all else fail - create a random 12bytes integer
-        if new_id is None: new_id = str(int.from_bytes(random.randbytes(12), byteorder='little', signed=False))
-        #and saved the new_id for future reuse - so this does not have to run everytime
-        # self.savedId(new_id)
-        #rpi_id is the hex representation of the hash
-        #convert it to bytes for sending with bytearray.fromhex(hex_string) or bytes.fromhex(hex_string)
-        self.rpi_id = self.hashTheId(new_id)
+        self.rpi_id = self.createComplexRpiID()
+
+    def createComplexRpiID(self):
+        cpuId = self.getNewCpuId()
+        wifiId = self.getMacAddressNetworking()
+        btId = self.getMacAdressBluetooth()
+        complexId = cpuId if cpuId is not None else ""
+        complexId += wifiId if wifiId is not None else ""
+        complexId += btId if btId is not None else ""
+        if complexId == "" : 
+            Log.log("no identifier found for this RPi - generating random id")
+            complexId = str(int.from_bytes(random.randbytes(12), byteorder='little', signed=False))
+        print(cpuId,wifiId,btId)
+        print(complexId)
+        print(self.hashTheId(complexId))
+        return self.hashTheId(complexId)
 
     def hashTheId(self,id_str):
         #return the hex representeion of the hash
@@ -224,8 +225,8 @@ class RPiId:
     def getAdapterAddress(self,adapter):
         try:
             with open(f"{adapter}/address", 'r', encoding="utf-8") as f:
-                found_id = f.read()
-                return None if (found_id !=  "00:00:00:00:00:00" or found_id == "") else found_id
+                found_id = f.read().rstrip('\n')
+                return None if (found_id ==  "00:00:00:00:00:00" or found_id == "") else found_id
         except Exception as e:
             return None
     
@@ -243,12 +244,15 @@ class RPiId:
         #shortcut - most RPi have either eth0 or wlan0 - so try these two first
         eth0 = "/sys/class/net/eth0"
         wlan0 = "/sys/class/net/wlan0"
-        if os.path.isdir(eth0):
-            found_id = self.getAdapterAddress(eth0)
-        if found_id is not None: return found_id
+        #since this was written to allow the user to set a wifi SSID and password via bluetooth
+        #in most cases we can expect the wlan0 adapter to exists - so always use that first
         if os.path.isdir(wlan0):
             found_id = self.getAdapterAddress(wlan0)
         if found_id is not None: return found_id
+        if os.path.isdir(eth0):
+            found_id = self.getAdapterAddress(eth0)
+        if found_id is not None: return found_id
+        
 
         #for differnet linux OS - name maybe different - use this to find ethernet and wifi adapters if they exists
         interfaces = [ f.path for f in os.scandir("/sys/class/net") if f.is_dir() ]

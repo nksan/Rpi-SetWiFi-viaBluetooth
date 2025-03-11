@@ -349,6 +349,9 @@ fi
 #
 # Enable services to start on system boot
 #
+echo ">set ReverseServiceDiscovery to False in  
+$sudo sed -i -E '/^\s*#?\s*ReverseServiceDiscovery\s*=/c\ReverseServiceDiscovery = false' /etc/bluetooth/main.conf
+
 echo "> Configure btwifiset service"
 $sudo systemctl daemon-reload
 $sudo systemctl enable btwifiset
