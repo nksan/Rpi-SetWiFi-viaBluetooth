@@ -349,7 +349,7 @@ fi
 #
 # Enable services to start on system boot
 #
-echo ">set ReverseServiceDiscovery to False in  
+echo ">set ReverseServiceDiscovery to False in bluetooth conf file" 
 $sudo sed -i -E '/^\s*#?\s*ReverseServiceDiscovery\s*=/c\ReverseServiceDiscovery = false' /etc/bluetooth/main.conf
 
 echo "> Configure btwifiset service"
