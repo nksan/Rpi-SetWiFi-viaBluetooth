@@ -1,7 +1,23 @@
 # Rpi-SetWiFi-viaBluetooth - Version 2
 
-Configure the Wifi network on a Raspberry Pi via Bluetooth
-* Version 2: published June 20, 2024.
+Configure the Wifi network on a Raspberry Pi via Bluetooth with your phone or tablet.
+* Version 2: published March 10, 2025.
+
+## What's new
+
+The app is now available for Android (previously was only iOS).
+
+>The BTBerryWifi App for Android is on the   <a href="https://play.google.com/store/apps/details?id=com.bluepieapps.btberrywifi" target="_blank">Google Play Store</a>.<br>
+It also available for iOS on the  <a href="https://apps.apple.com/us/app/btberrywifi/id1596978011" target="_blank">(Apple App Store)</a>.<br>
+Or, you can also find it by typing: BtBerryWifi , in your store search bar.
+
+## TL,DR: install the Python code on your Raspberry Pi first:
+
+1. Update your Raspberry Pi with *sudo apt update*, *sudo apt upgrade* and reboot (details below)
+2. run this in terminal on your RAspberry Pi:
+```
+curl  -L https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/main/btwifisetInstall.sh | bash
+```
 
 ## The Problem to be solved:
 
@@ -11,21 +27,21 @@ Configure the Wifi network on a Raspberry Pi via Bluetooth
 
 ## The solution: BTBerryWifi iOS app + RPi btwifiset.py
 
-The free iOS app BTBerryWifi  <a href="https://apps.apple.com/us/app/btberrywifi/id1596978011" target="_blank">(on AppStore)</a>  connects to a RPi via bluetooth and displays available wifi networks within range of the RPi.
+The BTBerryWifi app connects to a RPi via bluetooth and displays available wifi networks within range of the RPi.
 
- You select the network you need, enter the password - and send the information to the RPi, which connects to that wifi network, and reports back with success (or failure if the password is incorrect).  You can also tell the RPi to connect to a previously known network (without entering the password again).
+You select the network you need, enter the password - and send the information to the RPi, which connects to that wifi network, and reports back with success (or failure if the password is incorrect).  You can also tell the RPi to connect to a previously known network (without entering the password again).
 
-* See <a href="https://normfrenette.com/Set-wifi-via-bluetooth/iPhone-App-iPhone-app-usage">BTBerryWifi iOS App User guide</a>.
+## Requirement: Python Code on Raspberry Pi
 
-For the app to work, the Python code in ***btwifiset.py*** -  must be installed on the RPi. The installer provided here sets up btwifiset.py to run automatically when the RPi boots up. 
+For the app to work, the Python code in file ***btwifiset.py*** -  must be installed on the Raspberry Pi. The installer script provided here sets up btwifiset.py to run automatically when the RPi boots up. 
 
-So if your headless RPi might need to connect to a new wifi at some point, install btwifiset.py on the RPi now. Then, when you need it, you simply turn on (or reboot) the RPi, fire up the iOS ***BTBerryWifi*** app or your iPhone or iPad, and set the wifi credentials for your Pi.
+So if you might use the ***BTBerryWifi***  app at some point, install btwifiset.py on the RPi now. Then, when you need it, you simply turn on (or reboot) the RPi, fire up the app or your iOS/Android phone or tablet, and set the wifi credentials for your Pi.
 
 ## Installation
 
-The python code *btwifiset.py*, associated python modules and services must be installed on the Raspberry Pi before running the iPhone app
+The python code file *btwifiset.py*, associated python modules and services must be installed on the Raspberry Pi ***before*** running the iOS/Android app.
 
-First, please ensure that your RPi is up to date by running these commands:
+First, ensure that your RPi is up to date by running these commands:
 ```
 sudo apt update
 sudo apt upgrade --yes
@@ -43,8 +59,10 @@ What the installer does:
 * Ensures that /etc/wpa_supplicant/wpa_supplicant.conf is properly configured
     * Adds `update_config=1` if needed
     * Ensures a country code has been set. The installer will prompt you for your 2-letter country code if needed. See `/usr/share/zoneinfo/iso3166.tab` for a complete list of country codes
+* ask for a password that can be used for encryption (defaults to RPi host name )
 * Updates the bluetooth systemd service to start bluetoothd with settings required for btwifiset
 * Creates and set up the btwifiset systemd service (so it starts at boot)
+* Edit the bluetooth configuration false to prevent some Android devices to try to pair - which is not required nor wanted with Bluettoth Low Energy (BLE).
 
 Note: btwifiset service should start immediately after installation, and on every RPi reboot. By default, it is setup to run for 15 minutes (settable timeout) and then shut down. On some systems, btwifiset service will not start until reboot. You can check if btwifiset has started after installation with the following command. Look for the line that says *"Active: active (running)"* - if it's not there - reboot.
 ```
@@ -60,19 +78,22 @@ systemctl status btwifiset
  
 <a href=https://github.com/gitbls/sdm/blob/master/Docs/Installing-or-Removing-sdm.md>Install sdm</a> and then use the <a href=https://github.com/gitbls/sdm/blob/master/Docs/Example-Commands.md#official-getting-started-with-sdm-script>Official Getting Started with sdm Script</a> to jump-start your sdm usage and <a href=https://github.com/gitbls/sdm/blob/master/Docs/Example-Commands.md#example-commands>easily burn new disks</a> with btwifiset installed.
 
-## Manual Installation:
+## Documentation & Manual Installation:
+There is [detailed documentation](https://bluepieapps.com/Set-wifi-via-bluetooth/BTBerryWifi-Overview/#sectionTop) on the website [BluePieApps.com](https://bluepieapps.com)
 
-The [blog](https://normfrenette.com/Set-wifi-via-bluetooth/Installation-RaspberryPi-manual/#sectionTop) contains detailed step by step instructions and explanations of the installation.
+If you prefer to install the python code, dependencies and modify/create SsystemD service files yourself, use the [manual instalation](https://bluepieapps.com/Set-wifi-via-bluetooth/Installation-RaspberryPi-manual/#sectionTop) docs.
 
-Useful if you want to control/understand what happens on your Raspberry Pi, learn more about package installation, bluetooth  service or how to create a service of your own.
+## Version 2:
 
-TL;DR: just the steps - no explanation: see [last section here](#user-content-manual-install-code).
+If you have version 1 of the app - it will continue to function with the updated python code provided here with btwifiset.py.  Just run the installer again.  
 
-## What's new in version 2:
+To use the new features, however, you will need to update the iOS app to the latest version.
+
+Here's what's new/updated in version 2:
 
 ### Network Manager compatibility
 
-Raspberry Pi Foundation released the latest OS "Bookworm" - and for the first time included Network Manager which is turned on by default. 
+When Raspberry Pi Foundation released the new OS "Bookworm" -  for the first time it included Network Manager which is turned on by default. 
 Before that, RPi OSes were using wpa_supplicant and the associated  wpa_supplicant.conf file to set SSID/Password for wifi - which is what version 1 of btwifiset.py used.
 
 Network Manager uses wpa_supplicant behind the scenes - but most importantly blocks direct access to wpa_supplicant by other processes (such as btwifiset.py code).  If you installed version 1 on a "Bookworm" RPi, the BTBerryWifi app would still connect to the RPI via bluetooth and display the list of wifi Networks. But once you selected the network and entered the password, the RPi would never connect.
@@ -113,20 +134,13 @@ Extra features are available to supporters of this work:
 * Detailed signal strength (dbM) and channel/frequency of surrounding wifi AP/networks (useful for interference analysis).
 * Other Info: Edit the btwifiset.py code to generate any extra information you need and it is displayed on the phone/ipad.
 
-
-## Additional Information
-
-* [BTBerryWifi iOS App overview](https://normfrenette.com/Set-wifi-via-bluetooth/BTBerryWifi-Overview/#sectionTop)
-* [Supporter Extra Features](https://normfrenette.com/Set-wifi-via-bluetooth/Supporter-extra-features/#sectionTop)
-* [BTBerryWifi iOS App User Guide](https://normfrenette.com/Set-wifi-via-bluetooth/iPhone-App-iPhone-app-usage/#sectionTop)
-
 ## Code notes
 
 The *working* sub-directory in this repo contains the python files where the development occurs. You can clone these if you want to modify the code. If you do, run the file btwifi.py with python (it imports the rest).
 
 The file btwifiset.py installed by the installer is simply the combination of these three files with some small edits.
 
-## Code version: June 20, 2004
+## Code version: March 10, 2025
 
 There is no formal versioning  of the btwifiset.py - other than major versions (this is version 2).
 
@@ -135,17 +149,3 @@ Instead - the date at which the latest btwifiset.py was modified and published i
 ## Old version
 
 The version 1 of btwifiset.py is available in branch "version1".  Note that the installer in that case is also version 1 - and may not work correctly with Bookworm or later.
-
-## Android:
-
-I'm working on it... It'd been submitted to Google for approval. 
-
-Not sure how long it will take to get it through...
-
-## Manual Install code:
-
-Here are the steps to install manually:
-
-... coming soon ...
-
-( meanwhile, [all the details here](https://normfrenette.com/Set-wifi-via-bluetooth/Installation-RaspberryPi-manual/#sectionTop) )
