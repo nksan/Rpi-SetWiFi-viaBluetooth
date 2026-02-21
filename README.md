@@ -1,17 +1,12 @@
-# Rpi-SetWiFi-viaBluetooth - Version 2
+# Configure the Wifi network on a Raspberry Pi via Bluetooth with your phone or tablet.
+This repo has the Python code (btwifiset.py - version 2) that **must be installed** on the Raspberry Pi,
+to work with the **BtBerryWifi** app (to configure the wifi on a raspbery Pi using your phone).
 
-Configure the Wifi network on a Raspberry Pi via Bluetooth with your phone or tablet.
-* Version 2: published March 10, 2025.
+For reference **BtBerryWifi** app:
+For iOS:  on the  <a href="https://apps.apple.com/us/app/btberrywifi/id1596978011" target="_blank">(Apple App Store)</a>.<br>
+For Android:  on the   <a href="https://play.google.com/store/apps/details?id=com.bluepieapps.btberrywifi" target="_blank">Google Play Store</a>.<br>
 
-## What's new
-
-The app is now available for Android (previously was only iOS).
-
->The BTBerryWifi App for Android is on the   <a href="https://play.google.com/store/apps/details?id=com.bluepieapps.btberrywifi" target="_blank">Google Play Store</a>.<br>
-It also available for iOS on the  <a href="https://apps.apple.com/us/app/btberrywifi/id1596978011" target="_blank">(Apple App Store)</a>.<br>
-Or, you can also find it by typing: BtBerryWifi , in your store search bar.
-
-## TL,DR: install the Python code on your Raspberry Pi first:
+## TL,DR: install the Python code on your Raspberry Pi:
 
 1. Update your Raspberry Pi with *sudo apt update*, *sudo apt upgrade* and reboot (details below)
 2. run this in terminal on your RAspberry Pi:
@@ -19,23 +14,41 @@ Or, you can also find it by typing: BtBerryWifi , in your store search bar.
 curl  -L https://raw.githubusercontent.com/nksan/Rpi-SetWiFi-viaBluetooth/main/btwifisetInstall.sh | bash
 ```
 
-## The Problem to be solved:
+## What's new: Trixie (RPi OS v 13 issues)
 
-* You have a headless Raspberry Pi (RPi) - with no access to a keyboard/mouse/monitor - or your RPi is sealed in a box that you do not want to open.
+Some report that the btwifiset service exits (it does not work!) on some RPi - especially Pi Zero 2 W -  after a fresh install of the latest RPi OS (Trixie).
+
+The problem is due to ***rfkill*** having soft-blocked Bluetooth by default. To check, run (in terminal on the RPi):
+```
+rfkill list
+```
+If you see something similar to:
+>0: hci0: Bluetooth<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Soft blocked: yes<br> 
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Hard blocked: no
+
+You must unblock it before the service will run - use this command:
+```
+sudo rfkill unblock bluetooth
+```
+
+## All the details: The Problem to be solved:
+
+* You have a Raspberry Pi (RPi) - with no access to a keyboard/mouse/monitor - or your RPi is sealed in a box that you do not want to open.
 * Your RPi needs to connect to a new wifi network/SSID (which may or may not require a password).
 * Your RPi is not currently connected to wifi: you cannot ssh into it with your PC/Mac over wifi to set the new network parameters.
 
-## The solution: BTBerryWifi iOS app + RPi btwifiset.py
+## The solution: BTBerryWifi app on your phone  +  btwifiset.py installed on your RPi
 
 The BTBerryWifi app connects to a RPi via bluetooth and displays available wifi networks within range of the RPi.
 
-You select the network you need, enter the password - and send the information to the RPi, which connects to that wifi network, and reports back with success (or failure if the password is incorrect).  You can also tell the RPi to connect to a previously known network (without entering the password again).
+You select the network you need, enter the password. The app sends this information to the RPi, which connects to that wifi network, and reports back with success (or failure if the password is incorrect).  You can also tell the RPi to connect to a previously known network (without entering the password again).
 
 ## Requirement: Python Code on Raspberry Pi
 
-For the app to work, the Python code in file ***btwifiset.py*** -  must be installed on the Raspberry Pi. The installer script provided here sets up btwifiset.py to run automatically when the RPi boots up. 
+For the app to work, the Python code ***btwifiset.py*** -  must be installed on the Raspberry Pi. The installer script provided here sets up btwifiset.py to run automatically when the RPi boots up. 
 
-So if you might use the ***BTBerryWifi***  app at some point, install btwifiset.py on the RPi now. Then, when you need it, you simply turn on (or reboot) the RPi, fire up the app or your iOS/Android phone or tablet, and set the wifi credentials for your Pi.
+>So if you might use the ***BTBerryWifi***  app at some point, install btwifiset.py on the RPi now. Then, when you need it, you simply turn on (or reboot) the RPi, fire up the app or your iOS/Android phone or tablet, and set the wifi credentials for your Pi.
 
 ## Installation
 
@@ -64,7 +77,7 @@ What the installer does:
 * Creates and set up the btwifiset systemd service (so it starts at boot)
 * Edit the bluetooth configuration false to prevent some Android devices to try to pair - which is not required nor wanted with Bluettoth Low Energy (BLE).
 
-Note: btwifiset service should start immediately after installation, and on every RPi reboot. By default, it is setup to run for 15 minutes (settable timeout) and then shut down. On some systems, btwifiset service will not start until reboot. You can check if btwifiset has started after installation with the following command. Look for the line that says *"Active: active (running)"* - if it's not there - reboot.
+Note: btwifiset service should start immediately after installation, and on every RPi reboot. By default, it is setup to run for 15 minutes (settable timeout) and then shuts down. On some systems, btwifiset service will not start until reboot. You can check if btwifiset has started after installation with the following command. Look for the line that says *"Active: active (running)"* - if it's not there - reboot.
 ```
 systemctl status btwifiset
 ```
@@ -81,7 +94,7 @@ systemctl status btwifiset
 ## Documentation & Manual Installation:
 There is [detailed documentation](https://bluepieapps.com/Set-wifi-via-bluetooth/BTBerryWifi-Overview/#sectionTop) on the website [BluePieApps.com](https://bluepieapps.com)
 
-If you prefer to install the python code, dependencies and modify/create SsystemD service files yourself, use the [manual instalation](https://bluepieapps.com/Set-wifi-via-bluetooth/Installation-RaspberryPi-manual/#sectionTop) docs.
+If you prefer to install the python code, dependencies and modify/create SystemD service files yourself, use the [manual instalation](https://bluepieapps.com/Set-wifi-via-bluetooth/Installation-RaspberryPi-manual/#sectionTop) docs.
 
 ## Version 2:
 
@@ -119,7 +132,7 @@ ls /sys/class/bluetooth
 
 ### venv
 
-Newer OS like Raspberry  PI bookworm install all necessary packages (with correct version) via apt.
+Raspberry P OS bookworm or later install all necessary packages (with correct version) via apt.
 
 If you are on an older OS, or you came here to upgrade from version 1, the dbus and cryptography packages are either not available via apt, or are offered with older versions.  In this case the bash script provided installs these packages using Python Pip3, into a virtual environment  (venv) created under the /usr/local/btwifiset directory.  In this case the ExecStart line in the btwifiset service is modified to start with /venv/bin.python3.
 
@@ -132,7 +145,7 @@ Extra features are available to supporters of this work:
 * "Lock the RPi": so only users with the password you set can use the BtBerryWifi app to connect to your RPi.
 * Extra RPi info: RPi Wifi IP addresses (IP4 & IP6), Mac Addresses  of adapters (ethernet, wifi, bluetooth).
 * Detailed signal strength (dbM) and channel/frequency of surrounding wifi AP/networks (useful for interference analysis).
-* Other Info: Edit the btwifiset.py code to generate any extra information you need and it is displayed on the phone/ipad.
+* Additional Info sent to thr RPi: Edit the btwifiset.py code to generate any extra information you need and it is displayed on the phone/ipad.
 
 ## Code notes
 
@@ -142,9 +155,9 @@ The file btwifiset.py installed by the installer is simply the combination of th
 
 ## Code version: March 10, 2025
 
-There is no formal versioning  of the btwifiset.py - other than major versions (this is version 2).
+There is no minor versioning of the btwifiset.py - omly major versions (this is version 2).
 
-Instead - the date at which the latest btwifiset.py was modified and published is in the python code, and is logged. See class/method BLEManager.start() to view the current version date.
+Minor versionning is simply managed with the date at which the latest btwifiset.py is modified and published. It is hard coded in the python code, and is logged. Seek class/method BLEManager.start() in the code to view the current version date.
 
 ## Old version
 
