@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          font-size: 16px;
+          color: #222;
+          background-color: #fff;
+          margin: 2em;
+        }
+        select, input, button {
+          font-family: inherit;
+          font-size: 1em;
+        }
+    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFi Configuration via BLE</title>
+</head>
+<body>
+    <h1>WiFi Configuration via BLE</h1>
+    <button onclick="connectToBLE()">Connect to BLE Device</button>
+    <h2>IP Address</h2>
+    <p id="ipAddress">IP Address: Not connected</p>
+    <h2>Available Wi-Fi Networks</h2>
+    <select id="wifiList" size="10" style="width: 600px; font-size: 1em;"></select>
+    <div style="width: 600px; margin-top: 1em;">
+        <p>📶Signal strength 🔒Pasword protected 💾Saved on device ✅Currently connected</p>
+        <label for="wifiPassword">Password:</label>
+        <input type="password" id="wifiPassword" style="width: 44%;">
+        <button onclick="sendWifiCredentials()">Set password</button>
+        <button onclick="forgetSelectedNetwork()">Forget</button>
+        <button onclick="fetchWifiList()">Refresh</button>
+    </div>
+    <p id="status"></p>
+
+    <script>
+        let bleDevice;
+        let wifiDataCharacteristic;
+        const UUID_WIFISET = 'fda661b6-4ad0-4d5d-b82d-13ac464300ce';
+        const UUID_WIFIDATA = 'e622b297-6bfe-4f35-938e-39abfb697ac3';
+        const UUID_INFO = '62d77092-41bb-49a7-8e8f-dc254767e3bf';
+
+        async function connectToBLE() {
+            try {
+                document.getElementById('status').innerText = 'Requesting BLE device...';
+                console.log('Requesting BLE device...');
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [UUID_WIFISET] }]
+                });
+
+                document.getElementById('status').innerText = 'Connecting to GATT server...';
+                console.log('Connecting to GATT server...');
+                const server = await bleDevice.gatt.connect();
+
+                document.getElementById('status').innerText = 'Getting service...';
+                console.log('Getting service...');
+                const service = await server.getPrimaryService(UUID_WIFISET);
+
+                document.getElementById('status').innerText = 'Getting characteristics...';
+                console.log('Getting characteristics...');
+                wifiDataCharacteristic = await service.getCharacteristic(UUID_WIFIDATA);
+
+                document.getElementById('status').innerText = `Connected to: ${bleDevice.name}`;
+                console.log(`Connected to: ${bleDevice.name}`);
+
+                // Fetch data from the BLE device
+                await fetchIPAddress();
+                await fetchWifiList();
+            } catch (error) {
+                document.getElementById('status').innerText = `Failed to connect to BLE device ${error}`;
+                console.error('Failed to connect to BLE device:', error);
+            }
+        }
+
+        async function fetchIPAddress() {
+            try {
+                document.getElementById('status').innerText = 'Fetching IP address...';
+                console.log('Fetching IP address...');
+                await wifiDataCharacteristic.startNotifications();
+                wifiDataCharacteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+
+                // Send a command to fetch the IP address
+                const command = `\x1einfoIP`;
+                await wifiDataCharacteristic.writeValue(new TextEncoder().encode(command));
+                document.getElementById('status').innerText = 'Command sent to fetch IP address';
+                console.log('Command sent to fetch IP address');
+            } catch (error) {
+                document.getElementById('status').innerText = `Failed to fetch IP address ${error}`;
+                console.error('Failed to fetch IP address:', error);
+            }
+        }
+
+        async function fetchWifiList() {
+            try {
+                const command = `\x1eAP2s`;
+                await wifiDataCharacteristic.writeValue(new TextEncoder().encode(command));
+                document.getElementById('status').innerText = 'Sent AP2s scan command';
+                console.log('Sent AP2s scan command');
+            } catch (error) {
+                document.getElementById('status').innerText = `Failed to send AP2s command ${error}`;
+                console.error('Failed to send AP2s command:', error);
+            }
+        }
+
+
+        let multiWifiBuffer = '';
+        let multiWifiExpectedParts = 0;
+        let multiWifiCurrentIndex = 0;
+
+        function handleCharacteristicValueChanged(event) {
+            const raw = new TextDecoder().decode(event.target.value);
+            const value = raw.split('\x1e')[1]?.replace(/^wifi:/, '') || '';
+            console.log('Received BLE value:', value);
+
+            try {
+                if (/^\d{4}.+/.test(value)) {
+                    console.log('Received single SSID update:', value);
+                    insertOrUpdateNetworkOption(value);
+                } else if (value.startsWith('multiwifi:')) {
+                    const match = value.match(/^multiwifi:[^|]*\|(\d+)\|(\d+)\|(.*)$/);
+                    if (!match) throw new Error('Invalid multiwifi format');
+
+                    const partIndex = parseInt(match[1], 10);
+                    const partTotal = parseInt(match[2], 10);
+                    const fragment = match[3];
+
+                    console.log('multiwifi fragment:', partIndex, '/', partTotal);
+
+                    if (partIndex === 1) {
+                        multiWifiBuffer = '';
+                        multiWifiExpectedParts = partTotal;
+                        multiWifiCurrentIndex = 1;
+                    } else {
+                        multiWifiCurrentIndex++;
+                    }
+
+                    multiWifiBuffer += fragment;
+
+                    if (multiWifiCurrentIndex >= multiWifiExpectedParts) {
+                        document.getElementById('status').innerText = 'AP list received';
+                        console.log('AP list received');
+                        const parsed = JSON.parse(multiWifiBuffer);
+                        updateWifiList(parsed.allAps || []);
+                        multiWifiBuffer = '';
+                        multiWifiExpectedParts = 0;
+                        multiWifiCurrentIndex = 0;
+                    }
+
+                } else if (value.startsWith('READY2')) {
+                    return; // Ignore
+                } else if (value.startsWith('DELETED')) {
+                    document.getElementById('status').innerText = 'AP deleted from device';
+                    console.log('Received DELETED');
+                    fetchWifiList();
+                } else {
+                    const data = JSON.parse(value);
+                    if (data.ip4) {
+                        document.getElementById('ipAddress').textContent = `IP Address: ${data.ip4}`;
+                        document.getElementById('status').innerText = 'IP address received';
+                    }
+                }
+            } catch (error) {
+                console.error('Could not parse BLE data as JSON:', error);
+            }
+        }
+
+        function signalIcon(level) {
+            const subscripts = ['₀', '₁', '₂', '₃', '₄'];
+            const safeLevel = Math.max(0, Math.min(4, level));
+            return `📶${subscripts[safeLevel]}`;
+        }
+
+        function parseEncodedSsid(encoded) {
+            if (!encoded || encoded.length < 5) return null;
+
+            const flags = encoded.slice(0, 4);
+            const ssid = encoded.slice(4);
+            const [signal, locked, known, connected] = flags.split('').map(Number);
+
+            return { ssid, signal, locked, known, connected };
+        }
+
+        function formatSsidLabel({ ssid, signal, locked, known, connected }) {
+            const subscripts = ['₀', '₁', '₂', '₃', '₄'];
+            const signalIcon = `📶${subscripts[Math.max(0, Math.min(4, signal))]}`;
+            const lockIcon = locked ? '🔒' : '🔓';
+            const knownIcon = known ? '💾' : '';
+            const connectedIcon = connected ? '✅' : '';
+
+            return `${signalIcon} ${lockIcon} ${knownIcon} ${connectedIcon} ${ssid}`;
+        }
+
+        function updateWifiList(apArray) {
+            const wifiList = document.getElementById('wifiList');
+            wifiList.innerHTML = '';
+
+            apArray.forEach(encoded => {
+                const parsed = parseEncodedSsid(encoded);
+                if (!parsed) return;
+
+                const option = document.createElement('option');
+                option.value = parsed.ssid;
+                option.textContent = formatSsidLabel(parsed);
+                option.dataset.known = parsed.known;
+                option.dataset.raw = encoded;
+                wifiList.appendChild(option);
+            });
+        }
+
+        function encodeSsidWithFlags({ signal, locked, known, connected, ssid }) {
+            return `${signal}${locked}${known}${connected}${ssid}`;
+        }
+
+        function insertOrUpdateNetworkOption(encoded) {
+            const parsed = parseEncodedSsid(encoded);
+            if (!parsed) return;
+
+            const wifiList = document.getElementById('wifiList');
+            const existing = Array.from(wifiList.options).find(opt => opt.value === parsed.ssid);
+
+            if (parsed.connected === 1) {
+                // Clear connected status from all other options
+                Array.from(wifiList.options).forEach(opt => {
+                    if (opt.value !== parsed.ssid) {
+                        const other = parseEncodedSsid(opt.dataset.raw);
+                        if (!other) return;
+                        other.connected = 0;
+                        opt.textContent = formatSsidLabel(other);
+                        opt.dataset.raw = encodeSsidWithFlags(other);
+                    }
+                });
+            }
+
+            const label = formatSsidLabel(parsed);
+
+            if (existing) {
+                existing.textContent = label;
+                existing.dataset.known = parsed.known;
+                existing.dataset.raw = encoded;
+            } else {
+                const option = document.createElement('option');
+                option.value = parsed.ssid;
+                option.textContent = label;
+                option.dataset.known = parsed.known;
+                option.dataset.raw = encoded;
+                wifiList.appendChild(option);
+            }
+        }
+
+        async function sendWifiCredentials() {
+            const ssidSelect = document.getElementById('wifiList');
+            const passwordInput = document.getElementById('wifiPassword');
+
+            const ssid = ssidSelect.value;
+            const password = passwordInput.value;
+
+            if (!ssid) {
+                alert('Please select a network.');
+                return;
+            }
+
+            try {
+                const encoded = new TextEncoder().encode(`${ssid}\x1e${password}`);
+                await wifiDataCharacteristic.writeValue(encoded);
+                document.getElementById('status').innerText = `Sent credentials for SSID "${ssid}"`;
+                console.log(`Sent credentials for SSID "${ssid}"`);
+            } catch (error) {
+                console.error('Failed to send credentials:', error);
+            }
+        }
+
+        async function forgetSelectedNetwork() {
+            const ssidSelect = document.getElementById('wifiList');
+            const ssid = ssidSelect.value;
+
+            if (!ssid) {
+                alert('Please select a network to delete.');
+                return;
+            }
+
+            const confirmed = confirm(`Delete saved network "${ssid}"?`);
+            if (!confirmed) return;
+
+            try {
+                const command = `\x1eDEL-${ssid}`;
+                const encoded = new TextEncoder().encode(command);
+                await wifiDataCharacteristic.writeValue(encoded);
+                console.log(`Sent delete request for SSID "${ssid}"`);
+            } catch (error) {
+                console.error('Failed to send delete command:', error);
+            }
+        }
+
+    </script>
+</body>
+</html>
